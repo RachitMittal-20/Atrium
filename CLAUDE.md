@@ -40,9 +40,15 @@ every future turn, not just this one.
 6. **Types are real.** Strict TypeScript. No `any`. Shared types live in
    `src/types` and are imported, never redeclared.
 
+7. **This is Next.js 16, not 15.** `create-next-app` installed 16.3.4. Before
+   using an App Router API you're unsure about, check
+   `node_modules/next/dist/docs/01-app/` rather than assuming Next 15
+   conventions — see `AGENTS.md` for why. Nothing about the plan below
+   changes; only double-check unfamiliar APIs against the installed docs.
+
 ## Stack
 
-- Next.js 15, App Router, TypeScript strict
+- Next.js 16, App Router, TypeScript strict
 - Tailwind CSS v4 (CSS-first config via `@theme`, no `tailwind.config.js`)
 - GSAP + `@gsap/react` (free for commercial use, ScrollTrigger + SplitText
   included) — owns everything scroll- and 3D-camera-related
