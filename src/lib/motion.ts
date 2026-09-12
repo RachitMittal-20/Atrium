@@ -24,3 +24,8 @@ export const DURATION = {
   slow: 1.4,
   cinematic: 2.2,
 } as const;
+
+// Below this width, pinned and horizontally-scrubbed sections collapse to
+// plain stacked content — pinned scroll is miserable on a phone. Shared so
+// the scroll-narrative sections agree on exactly where that line is.
+export const PIN_BREAKPOINT = 900;

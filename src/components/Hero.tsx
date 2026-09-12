@@ -139,7 +139,7 @@ export function Hero() {
             ATRIUM
           </span>
           <div ref={enterButtonWrapRef}>
-            <Button variant="ghost">Enter Project</Button>
+            <Button href="/project" variant="ghost">Enter Project</Button>
           </div>
         </div>
 

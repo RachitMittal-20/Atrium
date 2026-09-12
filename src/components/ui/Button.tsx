@@ -6,12 +6,26 @@
  * everything else). Square corners throughout — the system stays sharp
  * everywhere except where a control must visibly read as clickable, and a
  * filled brass surface or bordered box already does that on its own.
+ *
+ * Pass `href` to render as a Next.js Link instead of a <button> — same
+ * classes either way, so there's one canonical place button styling lives
+ * rather than a hand-styled anchor duplicating it wherever a button needs
+ * to navigate.
  */
-import type { ButtonHTMLAttributes } from "react";
+import type { AnchorHTMLAttributes, ButtonHTMLAttributes } from "react";
+import Link from "next/link";
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+interface ButtonOwnProps {
   variant?: "primary" | "ghost";
 }
+
+type ButtonAsButton = ButtonOwnProps &
+  ButtonHTMLAttributes<HTMLButtonElement> & { href?: undefined };
+
+type ButtonAsLink = ButtonOwnProps &
+  AnchorHTMLAttributes<HTMLAnchorElement> & { href: string };
+
+type ButtonProps = ButtonAsButton | ButtonAsLink;
 
 const base =
   "inline-flex items-center justify-center px-6 py-3 font-mono text-3xs uppercase tracking-[0.18em] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass focus-visible:ring-offset-2 focus-visible:ring-offset-ground disabled:opacity-40 disabled:pointer-events-none";
@@ -21,6 +35,14 @@ const variants = {
   ghost: "border border-rule text-ink hover:border-ruleHi hover:text-ink",
 };
 
-export function Button({ variant = "primary", className = "", ...props }: ButtonProps) {
-  return <button className={`${base} ${variants[variant]} ${className}`} {...props} />;
+export function Button({ variant = "primary", className = "", href, ...props }: ButtonProps) {
+  const classes = `${base} ${variants[variant]} ${className}`;
+
+  if (href !== undefined) {
+    return (
+      <Link href={href} className={classes} {...(props as AnchorHTMLAttributes<HTMLAnchorElement>)} />
+    );
+  }
+
+  return <button className={classes} {...(props as ButtonHTMLAttributes<HTMLButtonElement>)} />;
 }
