@@ -1,15 +1,23 @@
 /**
  * src/app/page.tsx
  *
- * Design system specimen sheet for ATRIUM (P02). Renders every color token,
- * the full type scale, and every primitive in src/components/ui in both
- * variants where they have variants, so the whole visual system can be
- * checked at a glance in one place.
+ * Design system specimen sheet for ATRIUM (P02, extended in P03). Renders
+ * every color token, the full type scale, and every primitive in
+ * src/components/ui, so the whole visual system can be checked at a glance
+ * in one place. The final section is a proof that the motion foundation
+ * (P03) is wired correctly: a tall scroll section with a ScrollTrigger fade
+ * driven through Lenis + gsap.ticker rather than the native scroll event.
  *
  * This is a temporary inspection page — it gets fully replaced by the real
  * cinematic landing page later (P04-P06). Nothing here is meant to survive
- * past that point.
+ * past that point. It's a client component solely because the motion proof
+ * section needs useEffect to register its ScrollTrigger.
  */
+"use client";
+
+import { useEffect, useRef } from "react";
+import gsap from "gsap";
+import { EASE_WEIGHTED, DURATION } from "@/lib/motion";
 import { Label } from "@/components/ui/Label";
 import { Rule } from "@/components/ui/Rule";
 import { Button } from "@/components/ui/Button";
@@ -43,6 +51,36 @@ const typeScale = [
 ];
 
 export default function Home() {
+  const fadeTargetRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    const target = fadeTargetRef.current;
+    if (!target) return;
+
+    const tween = gsap.fromTo(
+      target,
+      { autoAlpha: 0, y: 40 },
+      {
+        autoAlpha: 1,
+        y: 0,
+        duration: DURATION.slow,
+        ease: EASE_WEIGHTED,
+        scrollTrigger: {
+          trigger: target,
+          start: "top 75%",
+          end: "top 35%",
+          scrub: true,
+          // markers: true, // uncomment locally to verify trigger position
+        },
+      },
+    );
+
+    return () => {
+      tween.scrollTrigger?.kill();
+      tween.kill();
+    };
+  }, []);
+
   return (
     <div className="mx-auto w-full max-w-5xl px-8 py-24">
       {/* Cover mark */}
@@ -159,6 +197,25 @@ export default function Home() {
             <FieldRow label="Area" value="42.6 m²" />
             <FieldRow label="Revision" value="R03" />
           </Panel>
+        </div>
+      </section>
+
+      {/* Motion proof: a tall section whose fade is driven by ScrollTrigger
+          through Lenis + gsap.ticker, confirming the single-clock wiring. */}
+      <section>
+        <Rule label="Motion Proof" className="mb-8" />
+        <div className="flex h-[150vh] flex-col items-center justify-center gap-6 border border-rule text-center">
+          <h2
+            ref={fadeTargetRef}
+            className="font-display text-2xl text-ink opacity-0"
+          >
+            One Clock, Everything Moves
+          </h2>
+          <p className="max-w-md text-muted">
+            This fades in as it crosses the middle of the viewport — driven by
+            gsap.ticker through Lenis, not the browser&apos;s native scroll
+            event.
+          </p>
         </div>
       </section>
     </div>
