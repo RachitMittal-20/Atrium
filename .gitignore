@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# raw, uncompressed 3D/HDRI source assets — see docs/ASSETS.md for provenance
+raw-assets/

@@ -154,18 +154,18 @@ export function Preloader({ onComplete }: PreloaderProps) {
     manager.onProgress = (url, loaded, total) => {
       started = true;
       animateTo(total > 0 ? (loaded / total) * 100 : 100);
-      prevOnProgress(url, loaded, total);
+      prevOnProgress?.(url, loaded, total);
     };
 
     manager.onLoad = () => {
       playExit();
-      prevOnLoad();
+      prevOnLoad?.();
     };
 
     manager.onError = (url) => {
       // A missing texture shouldn't strand a judge on a loading screen.
       playExit();
-      prevOnError(url);
+      prevOnError?.(url);
     };
 
     const graceTimer = window.setTimeout(() => {
