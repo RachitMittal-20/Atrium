@@ -1,0 +1,189 @@
+/**
+ * src/components/three/Scene.tsx
+ *
+ * The r3f Canvas for ATRIUM's 3D viewer — the apartment model, lit and
+ * orbitable. Tuned for quality and performance together rather than
+ * trading one for the other:
+ *
+ *  - dpr is a range ([1, 2]), not a fixed 2x — PerformanceMonitor pulls it
+ *    down to a flat 1 when frame rate drops and lets it back up to the
+ *    range once things recover.
+ *  - frameloop="demand": nothing renders unless something actually
+ *    changed. React-driven prop changes (hover, selection) and drei's
+ *    OrbitControls already call invalidate() on their own when they touch
+ *    r3f state — the one thing genuinely outside that system is page
+ *    scroll (Lenis moves the DOM, not any r3f state), so InvalidateOnScroll
+ *    below explicitly wires scrollStore to invalidate().
+ *  - ACES filmic tone mapping, sRGB output, and an explicit ground-colour
+ *    clear (alpha off) are set in onCreated rather than left to Canvas's
+ *    defaults, so this stays correct even if those defaults ever change.
+ *
+ * The model's own units are never assumed — and they turn out not to be
+ * metres: every node transform in the source file is identity, so
+ * three.js takes its raw vertex data literally, and the apartment ends up
+ * several thousand units across. Model() measures the real rendered
+ * bounding sphere after Center has repositioned it and derives the
+ * camera's near/far planes, ContactShadows' size, and OrbitControls'
+ * min/max distance from that measurement — never a hardcoded guess.
+ * (Bounds' own onFit callback can't be used for this: reading its source,
+ * it only ever fires for orthographic cameras — for a perspective camera,
+ * `fit()` silently delegates to `reset()`, which never calls it. Confirmed
+ * by testing: with onFit as the only source of that data, OrbitControls
+ * never mounted at all.)
+ */
+"use client";
+
+import { Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import { Canvas, useThree } from "@react-three/fiber";
+import {
+  Bounds,
+  Center,
+  ContactShadows,
+  Environment,
+  OrbitControls,
+  PerformanceMonitor,
+} from "@react-three/drei";
+import { BuildingModel } from "@/components/three/BuildingModel";
+import { HDRI_STUDIO_PATH } from "@/lib/assets";
+import { useScrollStore } from "@/store/scrollStore";
+
+// Matches --color-ground in src/app/globals.css — the canvas clear colour
+// has to be a real JS value, not a CSS variable, so it's restated here.
+const GROUND_COLOR = "#0A0B0C";
+
+const KEY_LIGHT_POSITION: [number, number, number] = [4, 6, 4];
+const RIM_LIGHT_POSITION: [number, number, number] = [-5, 3, -6];
+
+interface SceneProps {
+  className?: string;
+}
+
+// Lenis-driven page scroll never touches r3f state on its own, so under
+// frameloop="demand" it would otherwise never trigger a re-render. This
+// subscribes to the same scrollStore every other scroll-aware part of the
+// app reads and invalidates whenever it changes.
+function InvalidateOnScroll() {
+  const invalidate = useThree((state) => state.invalidate);
+  const progress = useScrollStore((state) => state.progress);
+  useEffect(() => {
+    invalidate();
+  }, [progress, invalidate]);
+  return null;
+}
+
+interface ModelExtent {
+  size: THREE.Vector3;
+  radius: number;
+}
+
+// Centres the model, measures it, and only then renders the things that
+// depend on that measurement (contact shadow size, orbit distance limits).
+// See the file header for why this is measured directly rather than read
+// from Bounds' onFit.
+function Model() {
+  const centerRef = useRef<THREE.Group>(null);
+  const camera = useThree((state) => state.camera);
+  const invalidate = useThree((state) => state.invalidate);
+  const [extent, setExtent] = useState<ModelExtent | null>(null);
+
+  // `camera` is a THREE.Camera instance reached via useThree — an
+  // imperative three.js object, not React state — so mutating its
+  // properties directly (near/far below) is the normal, correct r3f
+  // pattern, not a React Compiler safety violation. The compiler-oriented
+  // lint rule doesn't know that distinction, hence the blanket disable for
+  // this effect rather than per line.
+  /* eslint-disable react-hooks/immutability */
+  useLayoutEffect(() => {
+    const object = centerRef.current;
+    if (!object) return;
+    const box = new THREE.Box3().setFromObject(object);
+    if (box.isEmpty()) return;
+
+    const size = box.getSize(new THREE.Vector3());
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+
+    // Default near/far (0.1–1000) assume roughly metre-scale scenes; this
+    // model is nowhere close, so the clipping planes are rescaled to its
+    // actual measured size instead.
+    camera.near = sphere.radius / 100;
+    camera.far = sphere.radius * 100;
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.updateProjectionMatrix();
+    }
+
+    setExtent({ size, radius: sphere.radius });
+    invalidate();
+  }, [camera, invalidate]);
+  /* eslint-enable react-hooks/immutability */
+
+  return (
+    <>
+      <Bounds fit observe margin={1.2}>
+        <Center ref={centerRef} bottom>
+          <BuildingModel />
+        </Center>
+      </Bounds>
+
+      {extent && (
+        <ContactShadows
+          scale={Math.max(extent.size.x, extent.size.z) * 1.6}
+          opacity={0.35}
+          blur={2.5}
+          far={Math.max(extent.size.y, 0.1)}
+        />
+      )}
+
+      {extent && (
+        <OrbitControls
+          makeDefault
+          enableDamping
+          dampingFactor={0.08}
+          enablePan={false}
+          minPolarAngle={Math.PI / 6}
+          maxPolarAngle={Math.PI / 2 - 0.05}
+          minDistance={extent.radius * 0.6}
+          maxDistance={extent.radius * 4}
+          regress
+        />
+      )}
+    </>
+  );
+}
+
+export function Scene({ className }: SceneProps) {
+  const [dpr, setDpr] = useState<[number, number] | number>([1, 2]);
+
+  return (
+    <Canvas
+      className={className}
+      dpr={dpr}
+      frameloop="demand"
+      gl={{ antialias: true, alpha: false }}
+      onCreated={(state) => {
+        state.gl.toneMapping = THREE.ACESFilmicToneMapping;
+        state.gl.outputColorSpace = THREE.SRGBColorSpace;
+        state.gl.setClearColor(new THREE.Color(GROUND_COLOR), 1);
+      }}
+    >
+      <PerformanceMonitor
+        onDecline={() => setDpr(1)}
+        onIncline={() => setDpr([1, 2])}
+      />
+      <InvalidateOnScroll />
+
+      {/* Lights the HDRI beneath, not the star of the shot: low intensity
+          key + an even dimmer rim, mostly there to keep edges legible. */}
+      <directionalLight position={KEY_LIGHT_POSITION} intensity={0.6} />
+      <directionalLight position={RIM_LIGHT_POSITION} intensity={0.2} />
+
+      {/* Lights the model via image-based lighting without rendering as a
+          visible skybox behind it. */}
+      <Environment files={HDRI_STUDIO_PATH} background={false} />
+
+      <Suspense fallback={null}>
+        <Model />
+      </Suspense>
+    </Canvas>
+  );
+}
