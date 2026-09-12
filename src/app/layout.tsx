@@ -10,6 +10,7 @@
 import type { Metadata } from "next";
 import { Bodoni_Moda, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import { SmoothScrollProvider } from "@/components/motion/SmoothScrollProvider";
+import { Preloader } from "@/components/motion/Preloader";
 import "./globals.css";
 
 // Display face — headlines and large numerals only, never body copy.
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${bodoni.variable} ${plexSans.variable} ${plexMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        <Preloader />
         <SmoothScrollProvider>{children}</SmoothScrollProvider>
       </body>
     </html>
