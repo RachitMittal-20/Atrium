@@ -1,26 +1,73 @@
+/**
+ * src/app/globals.css
+ *
+ * ATRIUM design tokens (P02). This is the single source of visual truth —
+ * color, type scale, and font family bindings — declared as a Tailwind v4
+ * `@theme` block so every token below is also available as a utility class
+ * (e.g. `bg-ground`, `text-brass`, `text-lg`, `font-display`). Nothing here
+ * is component-specific; primitives in src/components/ui consume these
+ * tokens but never redeclare colors or sizes of their own.
+ *
+ * Font CSS variables (--font-display, --font-sans, --font-mono) are set on
+ * the <html> element by src/app/layout.tsx via next/font.
+ */
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* --- Color: architectural, dark, restrained --- */
+  --color-ground: #0a0b0c; /* page background */
+  --color-surface: #131518; /* raised panels */
+  --color-surface2: #191c20; /* inset areas */
+  --color-rule: #262a30; /* hairline borders */
+  --color-ruleHi: #3a3f47; /* emphasised borders */
+  --color-ink: #e9e5dc; /* primary text */
+  --color-muted: #8b9099; /* secondary text */
+  --color-faint: #5e646d; /* labels */
+  --color-brass: #d4a24c; /* the single accent */
+  --color-verdigris: #8dae84; /* status positive */
+  --color-clay: #c97b52; /* status attention */
+
+  /* --- Type families, bound to next/font variables in layout.tsx --- */
+  --font-display: var(--font-bodoni), serif; /* headlines, large numerals */
+  --font-sans: var(--font-plex-sans), sans-serif; /* body copy, UI */
+  --font-mono: var(--font-plex-mono), monospace; /* labels, data, IDs */
+
+  /* --- Type scale: one shared ramp for every text size in the system --- */
+  --text-3xs: 11px;
+  --text-2xs: 13px;
+  --text-xs: 15px;
+  --text-sm: 17px;
+  --text-md: 21px;
+  --text-lg: 28px;
+  --text-xl: 38px;
+  --text-2xl: 52px;
+  --text-3xl: 72px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+/* Base document setup: graphite ground, vellum text, interface font. */
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  line-height: 1.6;
+}
+
+/* Numerals in data/mono contexts always line up in a fixed-width column. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Respect the OS-level motion preference everywhere, from day one — any
+   transition or animation added later inherits this cutoff automatically. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
