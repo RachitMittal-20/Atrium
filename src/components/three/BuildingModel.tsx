@@ -12,7 +12,7 @@
  * meshes (a Sketchfab sketch-style line pass, not real architecture) are
  * rendered separately and are not interactive.
  *
- * Hover and selection both write to src/store/selectionStore — the shared
+ * Hover and selection both write to src/store/projectStore — the shared
  * bridge across the Canvas boundary — rather than taking callback props
  * from a parent:
  *  - onPointerOver/onPointerOut set/clear hoveredElementId, swap the
@@ -59,7 +59,7 @@ import type { ThreeElements } from "@react-three/fiber";
 import gsap from "gsap";
 import { MODEL_PATH } from "@/lib/assets";
 import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
-import { useSelectionStore } from "@/store/selectionStore";
+import { useProjectStore } from "@/store/projectStore";
 
 type GLTFResult = GLTF & {
   nodes: {
@@ -165,7 +165,7 @@ type NodeKey = keyof GLTFResult["nodes"];
 type MaterialKey = Exclude<keyof GLTFResult["materials"], "edge_color646464255">;
 
 interface MeshEntry {
-  /** Stable, unique identifier — what selectionStore actually holds. */
+  /** Stable, unique identifier — what projectStore actually holds. */
   id: string;
   /** Human-readable name — shown in the hover label. */
   label: string;
@@ -277,11 +277,11 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   const { nodes, materials } = useGLTF(MODEL_PATH) as unknown as GLTFResult;
   const invalidate = useThree((state) => state.invalidate);
 
-  const hoveredElementId = useSelectionStore((state) => state.hoveredElementId);
-  const selectedElementId = useSelectionStore((state) => state.selectedElementId);
-  const setHovered = useSelectionStore((state) => state.setHovered);
-  const clearHovered = useSelectionStore((state) => state.clearHovered);
-  const setSelected = useSelectionStore((state) => state.setSelected);
+  const hoveredElementId = useProjectStore((state) => state.hoveredElementId);
+  const selectedElementId = useProjectStore((state) => state.selectedElementId);
+  const setHovered = useProjectStore((state) => state.setHovered);
+  const clearHovered = useProjectStore((state) => state.clearHovered);
+  const setSelected = useProjectStore((state) => state.setSelected);
 
   // Every mesh gets its own material instance — material_1 is shared by
   // two meshes in the source file, and tweening a shared material's
@@ -339,7 +339,7 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
     document.body.style.cursor = "auto";
     // Only clear if this mesh is still the one on record — guards against
     // a stale pointerout racing behind a newer mesh's pointerover.
-    if (useSelectionStore.getState().hoveredElementId === id) {
+    if (useProjectStore.getState().hoveredElementId === id) {
       clearHovered();
     }
     gsap.to(meshMaterials[id], {

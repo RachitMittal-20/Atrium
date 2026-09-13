@@ -1,0 +1,94 @@
+/**
+ * src/types/project.ts
+ *
+ * The shape of everything ATRIUM's demo project is built from: the
+ * Project itself, the Elements that make up its FF&E/finishes schedule
+ * (one per interactive mesh in BuildingModel — see Element.meshName),
+ * client/designer Annotations pinned in 3D space, and the Revision
+ * history that explains how the design got to where it is. Shared
+ * everywhere this data is read (src/data/project.ts, projectStore, any
+ * future UI) — never redeclared locally.
+ */
+
+/** A 3D point or direction — reused for both Annotation.position and .normal. */
+export type Vec3 = [x: number, y: number, z: number];
+
+export type ProjectPhase =
+  | "Concept"
+  | "Design Development"
+  | "Client Review"
+  | "Final Sign-off";
+
+export interface Project {
+  id: string;
+  name: string;
+  /** Internal project code, e.g. for filing and drawing titleblocks. */
+  code: string;
+  client: string;
+  phase: ProjectPhase;
+  address: string;
+  /** The current revision label — matches the most recent Revision.label. */
+  revision: string;
+}
+
+export type ElementCategory =
+  | "Furniture"
+  | "Fixture"
+  | "Finish"
+  | "Structural"
+  | "Lighting";
+
+export type ElementStatus = "Approved" | "For Review" | "Revised" | "Issue";
+
+export interface Element {
+  id: string;
+  /** Must match a mesh id in BuildingModel's MESH_ENTRIES exactly — this is
+   *  what lets a click in the 3D scene resolve to a real Element. */
+  meshName: string;
+  name: string;
+  category: ElementCategory;
+  /** Free-form spec sheet lines — whatever a real schedule entry would
+   *  actually list for this kind of item (fabric + frame for furniture,
+   *  brand + model for fixtures, material + finish coat for finishes). */
+  specification: Record<string, string>;
+  status: ElementStatus;
+  /** The trade, supplier, or person accountable for this line item. */
+  responsibleParty: string;
+  /** ISO date string. */
+  lastUpdated: string;
+}
+
+export type AnnotationStatus = "Open" | "Resolved";
+
+export interface AnnotationReply {
+  id: string;
+  author: string;
+  body: string;
+  /** ISO date string. */
+  createdAt: string;
+}
+
+export interface Annotation {
+  id: string;
+  /** Null when a comment is pinned to open space rather than a specific
+   *  element (a layout or clearance note, not a spec callout). */
+  elementId: string | null;
+  position: Vec3;
+  /** Which way the marker faces, so it reads right-side-up in the scene. */
+  normal: Vec3;
+  author: string;
+  body: string;
+  /** ISO date string. */
+  createdAt: string;
+  status: AnnotationStatus;
+  replies: AnnotationReply[];
+}
+
+export interface Revision {
+  id: string;
+  label: string;
+  /** ISO date string. */
+  date: string;
+  summary: string;
+  changedElementIds: string[];
+}

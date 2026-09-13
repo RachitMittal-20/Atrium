@@ -47,7 +47,7 @@ import {
 import { BuildingModel } from "@/components/three/BuildingModel";
 import { HDRI_STUDIO_PATH } from "@/lib/assets";
 import { useScrollStore } from "@/store/scrollStore";
-import { useSelectionStore } from "@/store/selectionStore";
+import { useProjectStore } from "@/store/projectStore";
 
 // Matches --color-ground in src/app/globals.css — the canvas clear colour
 // has to be a real JS value, not a CSS variable, so it's restated here.
@@ -174,7 +174,7 @@ export function Scene({ className }: SceneProps) {
       // Fires only when a click hits nothing — every mesh's own onClick
       // already stops propagation, so this is exactly "clicked the empty
       // background," the deselect gesture.
-      onPointerMissed={() => useSelectionStore.getState().clearSelected()}
+      onPointerMissed={() => useProjectStore.getState().clearSelected()}
     >
       <PerformanceMonitor
         onDecline={() => setDpr(1)}
