@@ -19,6 +19,9 @@ gsap.registerPlugin(CustomEase);
 export const EASE_WEIGHTED = CustomEase.create("atriumWeighted", "0.16, 1, 0.3, 1");
 
 export const DURATION = {
+  // Micro-interactions (hover feedback) — deliberately below the cinematic
+  // scale below, since these need to read as instant, not as an entrance.
+  instant: 0.25,
   fast: 0.4,
   base: 0.8,
   slow: 1.4,

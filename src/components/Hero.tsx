@@ -2,9 +2,24 @@
  * src/components/Hero.tsx
  *
  * The hero — the single frame ATRIUM is judged on first. Layered back to
- * front: the graphite ground (the page background showing through), an
- * empty slot reserved for the WebGL scene a later prompt fills in, the
- * headline type, and minimal chrome pinned to the corners.
+ * front: the graphite ground (the page background showing through), the
+ * cinematic 3D scene (HeroScene) or its static fallback, the headline
+ * type, and minimal chrome pinned to the corners.
+ *
+ * The WebGL layer is progressively enhanced, never required:
+ *  - it defaults to rendering nothing extra (the graphite ground alone —
+ *    already fully legible) until a client-only effect decides otherwise,
+ *    so there's no SSR/hydration mismatch and no flash of the wrong mode.
+ *  - below PIN_BREAKPOINT (900px) or under prefers-reduced-motion, that
+ *    decision is a static pre-rendered still image — no WebGL is ever
+ *    requested on a phone.
+ *  - otherwise HeroScene mounts, with that same still passed as its
+ *    `fallback` — r3f's own built-in fallback for when WebGL context
+ *    creation itself fails. Either way, the headline sits on top and
+ *    reads fine with nothing behind it at all.
+ *  - past HeroScene's own scroll-driven arc (HERO_SCROLL_FRACTION, with a
+ *    little headroom), the canvas unmounts entirely, freeing its WebGL
+ *    context well before /project would ever need to open its own.
  *
  * Its entrance is one GSAP timeline gated on src/store/appStore's
  * isPreloaderComplete flag — set by Preloader's onComplete — so the hero
@@ -18,13 +33,68 @@
  */
 "use client";
 
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Image from "next/image";
 import gsap from "gsap";
 import { SplitText } from "gsap/SplitText";
 import { Button } from "@/components/ui/Button";
 import { Label } from "@/components/ui/Label";
-import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
+import { DURATION, EASE_WEIGHTED, PIN_BREAKPOINT } from "@/lib/motion";
 import { useAppStore } from "@/store/appStore";
+import { useScrollStore } from "@/store/scrollStore";
+import { HeroScene, HERO_SCROLL_FRACTION } from "@/components/three/HeroScene";
+
+const HERO_STILL_SRC = "/images/hero-model-still.jpg";
+
+// A little past where HeroScene's own camera arc finishes settling, so the
+// canvas doesn't vanish while still visibly mid-motion — and past where
+// Hero itself has fully scrolled out of view (measured: Hero's own height
+// is a somewhat larger fraction of total scroll than HERO_SCROLL_FRACTION
+// alone accounts for) — but still well before the viewer has scrolled
+// through the rest of the page.
+const UNMOUNT_AT_PROGRESS = HERO_SCROLL_FRACTION * 1.5;
+
+function HeroStill() {
+  return (
+    <Image
+      src={HERO_STILL_SRC}
+      alt=""
+      aria-hidden="true"
+      fill
+      priority
+      className="object-cover"
+      sizes="100vw"
+    />
+  );
+}
+
+type CanvasMode = "pending" | "static" | "live";
+
+function HeroWebGLLayer() {
+  const [mode, setMode] = useState<CanvasMode>("pending");
+
+  useLayoutEffect(() => {
+    const decideMode = () => {
+      const isNarrow = window.matchMedia(`(max-width: ${PIN_BREAKPOINT - 0.02}px)`).matches;
+      const prefersReducedMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      ).matches;
+      setMode(isNarrow || prefersReducedMotion ? "static" : "live");
+    };
+    decideMode();
+  }, []);
+
+  // Reference equality on a primitive boolean means this only re-renders
+  // HeroWebGLLayer at the moment the threshold is actually crossed, not on
+  // every scroll frame in between.
+  const shouldMountCanvas = useScrollStore(
+    (state) => state.progress < UNMOUNT_AT_PROGRESS,
+  );
+
+  if (mode === "pending") return null;
+  if (mode === "static") return <HeroStill />;
+  return shouldMountCanvas ? <HeroScene className="h-full w-full" fallback={<HeroStill />} /> : null;
+}
 
 export function Hero() {
   const headlineRef = useRef<HTMLHeadingElement>(null);
@@ -123,11 +193,11 @@ export function Hero() {
 
   return (
     <section className="relative w-full overflow-hidden bg-ground px-6 py-20 sm:px-10 sm:py-28 md:px-16 md:py-36">
-      {/* Layer: WebGL scene slot. Deliberately empty — a later prompt mounts
-          an r3f <Canvas> here, between the ground and the headline, so the
-          3D model sits inside the composition without ever covering the
-          text layer above it. */}
-      <div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true" />
+      {/* Layer: the cinematic 3D scene (or its static/fallback stand-in) —
+          see HeroWebGLLayer above for exactly when each renders. */}
+      <div className="pointer-events-none absolute inset-0 z-0" aria-hidden="true">
+        <HeroWebGLLayer />
+      </div>
 
       <div className="relative z-10 mx-auto flex w-full max-w-[100rem] flex-col gap-16 md:gap-24">
         {/* Top chrome: wordmark, enter-project action */}

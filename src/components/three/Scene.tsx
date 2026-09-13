@@ -47,6 +47,7 @@ import {
 import { BuildingModel } from "@/components/three/BuildingModel";
 import { HDRI_STUDIO_PATH } from "@/lib/assets";
 import { useScrollStore } from "@/store/scrollStore";
+import { useSelectionStore } from "@/store/selectionStore";
 
 // Matches --color-ground in src/app/globals.css — the canvas clear colour
 // has to be a real JS value, not a CSS variable, so it's restated here.
@@ -120,7 +121,12 @@ function Model() {
   return (
     <>
       <Bounds fit observe margin={1.2}>
-        <Center ref={centerRef} bottom>
+        {/* `top`, not `bottom`: verified empirically (see HeroScene.tsx's
+            file header) that drei's Center aligns the opposite of what the
+            prop names suggest — `bottom` leaves the object hanging below
+            y=0 (its top at zero); `top` is what actually sits it on the
+            floor at y=0, where ContactShadows below expects it. */}
+        <Center ref={centerRef} top>
           <BuildingModel />
         </Center>
       </Bounds>
@@ -165,6 +171,10 @@ export function Scene({ className }: SceneProps) {
         state.gl.outputColorSpace = THREE.SRGBColorSpace;
         state.gl.setClearColor(new THREE.Color(GROUND_COLOR), 1);
       }}
+      // Fires only when a click hits nothing — every mesh's own onClick
+      // already stops propagation, so this is exactly "clicked the empty
+      // background," the deselect gesture.
+      onPointerMissed={() => useSelectionStore.getState().clearSelected()}
     >
       <PerformanceMonitor
         onDecline={() => setDpr(1)}
