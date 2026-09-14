@@ -136,9 +136,16 @@ export function subscribeToProject(projectId: string, self: Reviewer, handlers: 
   let channel: RealtimeChannel | null = null;
 
   const teardownChannel = () => {
-    if (channel) {
-      void client.removeChannel(channel);
-      channel = null;
+    // Null out `channel` *before* asking the SDK to remove it, not after —
+    // client.removeChannel()'s internal unsubscribe can re-invoke the
+    // channel's own subscribe callback synchronously (see that callback's
+    // own comment below), and that reentrant call needs to already see
+    // `channel` pointing away from this one, or its `channel !== nextChannel`
+    // guard would still read them as equal and fail to break the recursion.
+    const toRemove = channel;
+    channel = null;
+    if (toRemove) {
+      void client.removeChannel(toRemove);
     }
   };
 
@@ -178,6 +185,13 @@ export function subscribeToProject(projectId: string, self: Reviewer, handlers: 
     const nextChannel: RealtimeChannel = client!.channel(topic, {
       config: { presence: { key: self.id } },
     });
+    // Set as the current channel *before* wiring up .on()/.subscribe(), not
+    // after — the subscribe callback below compares against this to detect
+    // a stale/superseded re-fire (see its own comment), and that comparison
+    // has to be correct even if the SDK ever invokes the callback
+    // synchronously during .subscribe() itself, before this function would
+    // otherwise have gotten around to assigning it.
+    channel = nextChannel;
 
     nextChannel
       .on<AnnotationRow>(
@@ -204,6 +218,21 @@ export function subscribeToProject(projectId: string, self: Reviewer, handlers: 
       })
       .subscribe((status) => {
         if (stopped) return;
+        // client.removeChannel() (called from teardownChannel, both on real
+        // cleanup and from scheduleReconnect below) awaits the channel's own
+        // unsubscribe handshake — and that handshake re-invokes THIS SAME
+        // callback with status CLOSED as part of shutting the channel down
+        // normally, not as a new failure. Without this guard that re-fire
+        // used to call scheduleReconnect() again for a channel already being
+        // torn down, which tears down *that* (new) channel too, which fires
+        // CLOSED again, recursing synchronously — reproduced as an infinite
+        // "CLOSED" loop that pegged the tab and eventually crashed it with a
+        // stack overflow (see P18 investigation). `channel` (the outer
+        // closure's current-channel pointer) only ever equals `nextChannel`
+        // while *this* channel is still the active one; teardownChannel nulls
+        // it out synchronously before removeChannel's unsubscribe can loop
+        // back around, so a stale re-fire always fails this check and no-ops.
+        if (channel !== nextChannel) return;
         if (status === "SUBSCRIBED") {
           retryDelay = INITIAL_RETRY_MS;
           handlers.onStatusChange("connected");
@@ -212,8 +241,6 @@ export function subscribeToProject(projectId: string, self: Reviewer, handlers: 
           scheduleReconnect();
         }
       });
-
-    channel = nextChannel;
   }
 
   handlers.onStatusChange("connecting");
