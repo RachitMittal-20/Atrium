@@ -11,12 +11,17 @@
  * Two different animation systems meet here on purpose:
  *  - Motion (this file only) drives the panel's own slide in/out and the
  *    mobile drag-to-dismiss gesture — plain DOM transitions, nothing 3D.
- *  - GSAP (useCameraFraming below) drives the OrbitControls target and
- *    camera position eased onto the selected element, via the viewport
- *    bridge projectStore carries across the Canvas boundary. This is the
- *    one place in the app where a DOM component reaches into the 3D scene,
- *    and it does so only through that store, never by importing anything
- *    from components/three.
+ *  - GSAP, via lib/motion's easeCameraTo (useCameraFraming below), drives
+ *    the OrbitControls target and camera position eased onto the selected
+ *    element, via the viewport bridge projectStore carries across the
+ *    Canvas boundary. This is the one place in the app where a DOM
+ *    component reaches into the 3D scene, and it does so only through
+ *    that store, never by importing anything from components/three.
+ *
+ * The "Pin a comment" button at the bottom hands off to spatial
+ * annotation: it closes this panel and arms pin mode (projectStore's
+ * enterPinMode), the same as pressing "C" — see ModeIndicator.tsx and
+ * BuildingModel.tsx for the rest of that flow.
  *
  * Responsive: a right-docked sidebar above 900px (PIN_BREAKPOINT, the same
  * line the rest of the app collapses pinned scroll at), a draggable bottom
@@ -26,10 +31,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import gsap from "gsap";
 import { AnimatePresence, motion, type PanInfo } from "motion/react";
 import { useProjectStore } from "@/store/projectStore";
-import { DURATION, PIN_BREAKPOINT } from "@/lib/motion";
+import { DURATION, PIN_BREAKPOINT, easeCameraTo } from "@/lib/motion";
 import { Label } from "./Label";
 import { Rule } from "./Rule";
 import { FieldRow } from "./FieldRow";
@@ -95,24 +99,7 @@ function useCameraFraming(element: Element | null) {
     const distance = THREE.MathUtils.clamp(sphere.radius * 3, controls.minDistance, controls.maxDistance);
     const nextPosition = center.clone().add(direction.multiplyScalar(distance));
 
-    // Tweened in place on detached vectors, then copied onto the real
-    // controls/camera each tick — gsap can't tween controls.target and
-    // camera.position directly without fighting OrbitControls' own
-    // damping-driven writes to those same objects.
-    const targetTween = controls.target.clone();
-    const positionTween = camera.position.clone();
-
-    const timeline = gsap.timeline({
-      onUpdate: () => {
-        controls.target.copy(targetTween);
-        camera.position.copy(positionTween);
-        controls.update();
-        invalidate();
-      },
-    });
-    timeline.to(targetTween, { x: center.x, y: center.y, z: center.z, duration: DURATION.frame }, 0);
-    timeline.to(positionTween, { x: nextPosition.x, y: nextPosition.y, z: nextPosition.z, duration: DURATION.frame }, 0);
-
+    const timeline = easeCameraTo(controls, camera, invalidate, center, nextPosition);
     return () => {
       timeline.kill();
     };
@@ -267,7 +254,12 @@ export function ElementPanel() {
           </div>
 
           <div className="border-t border-rule px-6 py-5">
-            <Button type="button" variant="primary" className="w-full">
+            <Button
+              type="button"
+              variant="primary"
+              className="w-full"
+              onClick={() => useProjectStore.getState().enterPinMode()}
+            >
               Pin a comment
             </Button>
           </div>

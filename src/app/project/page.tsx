@@ -6,11 +6,13 @@
  * Invitation. Chrome is minimal: the ATRIUM wordmark and a mono project
  * label float over the top-left corner, matching the Hero's chrome, over
  * the graphite ground showing through wherever the model doesn't.
+ * ModeIndicator mirrors it top-right with the Review/Pin badge.
  */
 import { Scene } from "@/components/three/Scene";
 import { SceneLoader } from "@/components/three/SceneLoader";
 import { Label } from "@/components/ui/Label";
 import { ElementPanel } from "@/components/ui/ElementPanel";
+import { ModeIndicator } from "@/components/ui/ModeIndicator";
 
 export default function ProjectPage() {
   return (
@@ -23,6 +25,7 @@ export default function ProjectPage() {
         <Label>Project 001 — Meridian House</Label>
       </div>
 
+      <ModeIndicator />
       <ElementPanel />
     </main>
   );

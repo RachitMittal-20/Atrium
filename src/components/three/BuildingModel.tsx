@@ -18,9 +18,17 @@
  *  - onPointerOver/onPointerOut set/clear hoveredElementId, swap the
  *    cursor, and tween that mesh's own emissive intensity toward brass
  *    with GSAP (never a material swap — same material, animated in place).
- *  - onClick sets selectedElementId; the empty-space click that clears it
- *    is wired on the Canvas itself (onPointerMissed, in Scene.tsx) since
- *    that only fires when literally nothing was hit.
+ *    Suppressed while in pin mode: ModeIndicator.tsx owns the cursor then
+ *    (a crosshair), and highlighting an element you're about to pin past
+ *    would read as "about to select", which isn't what's happening.
+ *  - onClick's behaviour depends on projectStore's `mode`: in "review" it
+ *    sets selectedElementId as before; in "pin" it instead raycasts the
+ *    click into a world point + surface normal, converts both into
+ *    outerGroupRef's local space (see MESH_ROTATION and handleClick
+ *    below), and hands them to projectStore as `pendingPin` for
+ *    AnnotationComposer to pick up. Either way the empty-space click that
+ *    clears selection is wired on the Canvas itself (onPointerMissed, in
+ *    Scene.tsx).
  *  - every one of these stops propagation, so a click or hover on the
  *    frontmost mesh never also registers on whatever is behind it.
  *  - a drei Html label follows the hovered mesh in screen space, and an
@@ -42,10 +50,24 @@
  *
  * Pass `interactive={false}` (the hero's cinematic shot does) to skip all
  * of the above entirely — no cloned materials, no pointer handlers, no
- * Html label, no EffectComposer/Outline. It's not just "interaction does
- * nothing": r3f still raycasts every mesh that has a pointer handler
- * attached on every pointer move, so leaving those handlers off altogether
- * is what actually removes the cost, not merely the visible effect.
+ * Html label, no EffectComposer/Outline, no annotation markers/composer.
+ * It's not just "interaction does nothing": r3f still raycasts every mesh
+ * that has a pointer handler attached on every pointer move, so leaving
+ * those handlers off altogether is what actually removes the cost, not
+ * merely the visible effect.
+ *
+ * Annotation markers (AnnotationMarker) and the in-progress pin composer
+ * (AnnotationComposer) are rendered as children of outerGroupRef — a
+ * sibling of meshGroupRef (the rotated group every MESH_ENTRIES <mesh>
+ * lives in), not a descendant of it. That distinction matters:
+ * Annotation.position and .normal are stored in outerGroupRef's frame
+ * (unrotated — matching how data/project.ts's seed data was computed, by
+ * rotating raw GLB coordinates once and storing the result), so rendering
+ * a marker inside the *already-rotated* meshGroupRef would rotate it a
+ * second time. Both groups still share the exact same outer transform
+ * (whatever Center/Bounds in Scene.tsx apply via `props`), which is what
+ * keeps the model and its markers welded together through any amount of
+ * orbiting despite living in two different child groups.
  */
 "use client";
 
@@ -60,6 +82,8 @@ import gsap from "gsap";
 import { MODEL_PATH } from "@/lib/assets";
 import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
 import { useProjectStore } from "@/store/projectStore";
+import { AnnotationMarker } from "@/components/three/AnnotationMarker";
+import { AnnotationComposer } from "@/components/three/AnnotationComposer";
 
 type GLTFResult = GLTF & {
   nodes: {
@@ -263,12 +287,31 @@ const BRASS_DIM = "#5A4322"; // hiddenEdgeColor for the selection outline — a 
 // relative effect against an already-bright base.
 const HOVER_EMISSIVE_INTENSITY = 0.08;
 
+// Falls back to a reasonable default if a hit somehow carries no
+// interpolated normal (BufferGeometry without a normal attribute) — every
+// geometry this model actually loads has one, this just keeps the type
+// honest and the composer from crashing on a freak input.
+const FALLBACK_NORMAL = new THREE.Vector3(0, 1, 0);
+
+// The exact rotation the inner mesh group below applies. A raycast hit's
+// event.normal comes back in the *intersected mesh's own object space* —
+// which, since every MESH_ENTRIES node has an identity local transform,
+// is the same frame that rotation starts from (raw, pre-rotation GLB
+// space). Annotation.position/.normal are stored post-rotation, matching
+// data/project.ts's seed data (computed by applying this exact rotation to
+// raw GLB coordinates) — so a captured normal needs this rotation applied
+// to land in that same frame; a captured point doesn't, because it's read
+// via outerGroupRef.worldToLocal, which already stops short of this
+// rotation (see handleClick below).
+const MESH_ROTATION = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+
 type BuildingModelProps = ThreeElements["group"] & {
   /**
    * Set false for a purely decorative shot (the hero): skips cloned
-   * materials, pointer handlers, the hover label, and the selection
-   * outline entirely, rather than just leaving them visually inert.
-   * Defaults true — the interactive /project scene's normal behaviour.
+   * materials, pointer handlers, the hover label, the selection outline,
+   * and annotation markers/composer entirely, rather than just leaving
+   * them visually inert. Defaults true — the interactive /project scene's
+   * normal behaviour.
    */
   interactive?: boolean;
 };
@@ -282,6 +325,8 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   const setHovered = useProjectStore((state) => state.setHovered);
   const clearHovered = useProjectStore((state) => state.clearHovered);
   const setSelected = useProjectStore((state) => state.setSelected);
+  const annotations = useProjectStore((state) => state.annotations);
+  const pendingPin = useProjectStore((state) => state.pendingPin);
 
   // Every mesh gets its own material instance — material_1 is shared by
   // two meshes in the source file, and tweening a shared material's
@@ -304,6 +349,17 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   }, [materials, interactive]);
 
   const objectRefs = useRef<Record<string, THREE.Mesh | null>>({});
+  // Every MESH_ENTRIES <mesh> lives inside this group, rotated -90° on X to
+  // match the source file's authoring orientation — see the file header.
+  const meshGroupRef = useRef<THREE.Group>(null);
+  // AnnotationMarker/AnnotationComposer live here instead, one level up
+  // (unrotated) — Annotation.position/.normal are stored in *this* frame,
+  // not meshGroupRef's (see MESH_ROTATION above and handleClick below).
+  // Both groups still share the exact same outer transform (whatever
+  // Center/Bounds in Scene.tsx apply via `props`), which is what keeps
+  // everything — meshes and markers alike — welded together through any
+  // amount of orbiting.
+  const outerGroupRef = useRef<THREE.Group>(null);
 
   // Every hover/selection change needs a fresh render under
   // frameloop="demand" — this alone covers the state change itself; the
@@ -323,6 +379,10 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
 
   const handlePointerOver = (id: string) => (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
+    // In pin mode ModeIndicator.tsx owns the cursor (a crosshair, constant
+    // for the whole mode) — leaving the per-mesh "pointer" swap in would
+    // fight it on every hover.
+    if (useProjectStore.getState().mode === "pin") return;
     document.body.style.cursor = "pointer";
     setHovered(id);
     gsap.to(meshMaterials[id], {
@@ -336,7 +396,9 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
 
   const handlePointerOut = (id: string) => (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
-    document.body.style.cursor = "auto";
+    if (useProjectStore.getState().mode !== "pin") {
+      document.body.style.cursor = "auto";
+    }
     // Only clear if this mesh is still the one on record — guards against
     // a stale pointerout racing behind a newer mesh's pointerover.
     if (useProjectStore.getState().hoveredElementId === id) {
@@ -353,6 +415,26 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
 
   const handleClick = (id: string) => (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation();
+    const state = useProjectStore.getState();
+
+    if (state.mode === "pin") {
+      const group = outerGroupRef.current;
+      if (!group) return;
+      // event.point is world space; worldToLocal against the *unrotated*
+      // outer group lands it in the same frame Annotation.position is
+      // stored in. event.normal, by contrast, comes back in the hit
+      // mesh's own object space (pre-rotation — see MESH_ROTATION above),
+      // so it needs that rotation applied to land in that same frame too.
+      const localPoint = group.worldToLocal(event.point.clone());
+      const localNormal = (event.normal ?? FALLBACK_NORMAL).clone().applyQuaternion(MESH_ROTATION).normalize();
+      state.setPendingPin({
+        position: [localPoint.x, localPoint.y, localPoint.z],
+        normal: [localNormal.x, localNormal.y, localNormal.z],
+        meshName: id,
+      });
+      return;
+    }
+
     setSelected(id);
   };
 
@@ -367,8 +449,8 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   }, [selectedElementId]);
 
   return (
-    <group {...props} dispose={null}>
-      <group rotation={[-Math.PI / 2, 0, 0]}>
+    <group ref={outerGroupRef} {...props} dispose={null}>
+      <group ref={meshGroupRef} rotation={[-Math.PI / 2, 0, 0]}>
         {/* Decorative edge-line overlay traced over the whole model — a
             Sketchfab sketch-style outline pass, not real geometry, and not
             interactive. */}
@@ -402,6 +484,12 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
           </mesh>
         ))}
       </group>
+
+      {interactive &&
+        annotations.map((annotation, index) => (
+          <AnnotationMarker key={annotation.id} annotation={annotation} number={index + 1} />
+        ))}
+      {interactive && pendingPin && <AnnotationComposer pendingPin={pendingPin} />}
 
       {interactive && selectedObject && (
         <EffectComposer autoClear={false}>

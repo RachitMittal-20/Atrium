@@ -22,16 +22,33 @@
  * state — kept in a closed-over plain object rather than store state, so
  * registering one on every mesh mount never triggers a re-render the way
  * calling set() would.
+ *
+ * And spatial annotation itself: `mode` is the review/pin toggle
+ * ModeIndicator.tsx displays and drives from "C"/Escape, and
+ * ElementPanel.tsx's "Pin a comment" button drives via enterPinMode().
+ * `pendingPin` is the point+normal+mesh a click captured while in pin
+ * mode, read by AnnotationComposer.tsx to render the composer and, on
+ * submit, turned into a real Annotation via addAnnotation.
  */
 import { create } from "zustand";
 import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { ELEMENTS, ANNOTATIONS, PROJECT } from "@/data/project";
-import type { Annotation, Element, Project } from "@/types/project";
+import type { Annotation, Element, Project, Vec3 } from "@/types/project";
 
 interface ViewportBridge {
   controls: OrbitControlsImpl | null;
   invalidate: (() => void) | null;
+}
+
+export type ProjectMode = "review" | "pin";
+
+export interface PendingPin {
+  position: Vec3;
+  normal: Vec3;
+  /** The mesh id the pinning click landed on — null in the (currently
+   *  theoretical) case of a click that doesn't resolve to a mapped mesh. */
+  meshName: string | null;
 }
 
 interface ProjectState {
@@ -39,6 +56,8 @@ interface ProjectState {
   project: Project;
   elements: Element[];
   annotations: Annotation[];
+  /** Appends a freshly pinned Annotation — the only way annotations grows. */
+  addAnnotation: (annotation: Annotation) => void;
 
   // --- Selection (formerly selectionStore) ---
   hoveredElementId: string | null;
@@ -47,6 +66,19 @@ interface ProjectState {
   clearHovered: () => void;
   setSelected: (id: string) => void;
   clearSelected: () => void;
+
+  // --- Spatial annotation: pin mode ---
+  mode: ProjectMode;
+  pendingPin: PendingPin | null;
+  /** Closes any open element panel and arms pin mode for the next click. */
+  enterPinMode: () => void;
+  /** Back to Review, discarding any captured-but-unsubmitted pin. */
+  exitPinMode: () => void;
+  togglePinMode: () => void;
+  setPendingPin: (pin: PendingPin) => void;
+  /** Drops the captured point without leaving pin mode — "wrong spot,
+   *  let me click again" rather than "get me out of this entirely". */
+  clearPendingPin: () => void;
 
   // --- Selectors ---
   /** The Element whose meshName matches a BuildingModel mesh id, if any. */
@@ -70,6 +102,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     project: PROJECT,
     elements: ELEMENTS,
     annotations: ANNOTATIONS,
+    addAnnotation: (annotation) => set((state) => ({ annotations: [...state.annotations, annotation] })),
 
     hoveredElementId: null,
     selectedElementId: null,
@@ -77,6 +110,19 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     clearHovered: () => set({ hoveredElementId: null }),
     setSelected: (id) => set({ selectedElementId: id }),
     clearSelected: () => set({ selectedElementId: null }),
+
+    mode: "review",
+    pendingPin: null,
+    enterPinMode: () => set({ mode: "pin", selectedElementId: null, pendingPin: null }),
+    exitPinMode: () => set({ mode: "review", pendingPin: null }),
+    togglePinMode: () =>
+      set((state) =>
+        state.mode === "pin"
+          ? { mode: "review", pendingPin: null }
+          : { mode: "pin", selectedElementId: null, pendingPin: null },
+      ),
+    setPendingPin: (pin) => set({ pendingPin: pin }),
+    clearPendingPin: () => set({ pendingPin: null }),
 
     getElementByMeshId: (meshId) => get().elements.find((element) => element.meshName === meshId),
     getAnnotationsForElement: (elementId) =>
