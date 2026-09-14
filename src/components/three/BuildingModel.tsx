@@ -382,6 +382,10 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
               interactive
                 ? (el) => {
                     objectRefs.current[entry.id] = el;
+                    // ElementPanel.tsx (outside the Canvas) needs this
+                    // mesh's live world bounding box to frame the camera on
+                    // selection — projectStore is the only bridge it has.
+                    useProjectStore.getState().registerElementObject(entry.id, el);
                   }
                 : undefined
             }

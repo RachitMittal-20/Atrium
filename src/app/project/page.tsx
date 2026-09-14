@@ -10,6 +10,7 @@
 import { Scene } from "@/components/three/Scene";
 import { SceneLoader } from "@/components/three/SceneLoader";
 import { Label } from "@/components/ui/Label";
+import { ElementPanel } from "@/components/ui/ElementPanel";
 
 export default function ProjectPage() {
   return (
@@ -21,6 +22,8 @@ export default function ProjectPage() {
         <span className="font-display text-sm tracking-wide text-ink">ATRIUM</span>
         <Label>Project 001 — Meridian House</Label>
       </div>
+
+      <ElementPanel />
     </main>
   );
 }

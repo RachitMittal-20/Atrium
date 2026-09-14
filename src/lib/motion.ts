@@ -26,6 +26,10 @@ export const DURATION = {
   base: 0.8,
   slow: 1.4,
   cinematic: 2.2,
+  // The element panel's camera-framing ease (ElementPanel.tsx) — long enough
+  // to read as a deliberate reframe, short enough not to make the reviewer
+  // wait to see the spec they just clicked for.
+  frame: 1.2,
 } as const;
 
 // Below this width, pinned and horizontally-scrubbed sections collapse to

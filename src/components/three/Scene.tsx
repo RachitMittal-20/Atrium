@@ -88,6 +88,15 @@ function Model() {
   const invalidate = useThree((state) => state.invalidate);
   const [extent, setExtent] = useState<ModelExtent | null>(null);
 
+  // ElementPanel.tsx (outside the Canvas) eases the camera onto whatever
+  // gets selected — it can only do that with a live handle on invalidate,
+  // so hand it over via the same store BuildingModel already writes
+  // selection into. The OrbitControls instance itself is registered where
+  // it's actually created, further down.
+  useEffect(() => {
+    useProjectStore.getState().registerViewport({ invalidate });
+  }, [invalidate]);
+
   // `camera` is a THREE.Camera instance reached via useThree — an
   // imperative three.js object, not React state — so mutating its
   // properties directly (near/far below) is the normal, correct r3f
@@ -151,6 +160,12 @@ function Model() {
           minDistance={extent.radius * 0.6}
           maxDistance={extent.radius * 4}
           regress
+          // Registered into projectStore the instant it exists — this is
+          // the same controls object ElementPanel.tsx drives with GSAP to
+          // frame a selected element, from all the way outside the Canvas.
+          ref={(instance) => {
+            useProjectStore.getState().registerViewport({ controls: instance });
+          }}
         />
       )}
     </>
