@@ -13,6 +13,7 @@ import { SceneLoader } from "@/components/three/SceneLoader";
 import { Label } from "@/components/ui/Label";
 import { ElementPanel } from "@/components/ui/ElementPanel";
 import { ModeIndicator } from "@/components/ui/ModeIndicator";
+import { ReviewList } from "@/components/ui/ReviewList";
 
 export default function ProjectPage() {
   return (
@@ -26,6 +27,7 @@ export default function ProjectPage() {
       </div>
 
       <ModeIndicator />
+      <ReviewList />
       <ElementPanel />
     </main>
   );

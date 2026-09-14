@@ -9,17 +9,24 @@
  * Registers CustomEase once at module load so EASE_WEIGHTED is usable
  * anywhere gsap.to/from/timeline accepts an ease.
  *
- * Also the home for easeCameraTo, the one GSAP routine that moves
- * OrbitControls' target and the camera together — used by both
- * ElementPanel.tsx (frame the selected element, keeping the current
- * viewing angle) and AnnotationMarker.tsx (face a pinned point along its
- * stored normal). Two real, differently-motivated callers computing their
- * own target/position but sharing identical tween mechanics is exactly
- * what earns this its own function rather than staying copy-pasted.
+ * Also the home for two shared camera-targeting primitives:
+ *  - easeCameraTo, the one GSAP routine that moves OrbitControls' target
+ *    and the camera together — used by ElementPanel.tsx (frame the
+ *    selected element, keeping the current viewing angle), AnnotationMarker
+ *    .tsx (face a pinned point along its stored normal) and ReviewList.tsx
+ *    (row clicks and J/K navigation, both facing a pinned point the same
+ *    way AnnotationMarker's own click does).
+ *  - annotationCameraTarget, which computes the {target, position} pair
+ *    easeCameraTo needs from an annotation's live Object3D — shared by
+ *    AnnotationMarker.tsx and ReviewList.tsx so "how do we frame a pinned
+ *    point" has exactly one implementation, not two that could drift.
+ * Real, differently-motivated callers computing their own inputs but
+ * sharing identical tween mechanics is exactly what earns these their own
+ * functions rather than staying copy-pasted.
  */
 import gsap from "gsap";
 import { CustomEase } from "gsap/CustomEase";
-import type * as THREE from "three";
+import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 
 gsap.registerPlugin(CustomEase);
@@ -80,4 +87,25 @@ export function easeCameraTo(
   timeline.to(targetTween, { x: target.x, y: target.y, z: target.z, duration: DURATION.frame, ease: EASE_WEIGHTED }, 0);
   timeline.to(positionTween, { x: position.x, y: position.y, z: position.z, duration: DURATION.frame, ease: EASE_WEIGHTED }, 0);
   return timeline;
+}
+
+/**
+ * The {target, position} pair easeCameraTo needs to face an annotation's
+ * pinned point along its stored normal. `object` is the annotation's live
+ * Object3D (projectStore's registerAnnotationObject/getAnnotationObject)
+ * — by construction (AnnotationMarker.tsx's own quaternion), its local
+ * +Z axis is the stored normal, so reading that axis back out in world
+ * space here is exactly the inverse of how the marker was oriented.
+ */
+export function annotationCameraTarget(
+  object: THREE.Object3D,
+  controls: OrbitControlsImpl,
+): { target: THREE.Vector3; position: THREE.Vector3 } {
+  const target = object.getWorldPosition(new THREE.Vector3());
+  const normal = new THREE.Vector3(0, 0, 1)
+    .applyQuaternion(object.getWorldQuaternion(new THREE.Quaternion()))
+    .normalize();
+  const distance = THREE.MathUtils.clamp(controls.minDistance * 1.5, controls.minDistance, controls.maxDistance);
+  const position = target.clone().add(normal.multiplyScalar(distance));
+  return { target, position };
 }

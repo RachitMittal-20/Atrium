@@ -42,20 +42,29 @@
  * where camera distance can have changed, never more.
  *
  * Hovering previews the comment body; clicking eases the camera to face
- * the pinned point along its stored normal (lib/motion's easeCameraTo,
- * the same routine ElementPanel.tsx uses to frame a selected element)
- * and, when the annotation landed on an element, selects that element so
- * ElementPanel opens showing its full thread.
+ * the pinned point along its stored normal (lib/motion's
+ * annotationCameraTarget + easeCameraTo, shared with ReviewList.tsx's row
+ * clicks and J/K navigation) and, when the annotation landed on an
+ * element, selects that element so ElementPanel opens showing its full
+ * thread.
+ *
+ * Hover state lives in projectStore (hoveredAnnotationId), not local
+ * state — ReviewList.tsx writes it too, on row hover, so hovering a row
+ * highlights this marker exactly the way hovering the marker highlights
+ * its row. This component also registers its own <group> into the store
+ * (registerAnnotationObject) on mount, so ReviewList can read this exact
+ * world position/orientation for its own camera-easing, without needing
+ * a second copy of the position math.
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import type gsap from "gsap";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { easeCameraTo } from "@/lib/motion";
+import { annotationCameraTarget, easeCameraTo } from "@/lib/motion";
 import { useProjectStore } from "@/store/projectStore";
 import type { Annotation } from "@/types/project";
 
@@ -75,6 +84,10 @@ const RING_INNER_RADIUS = 45;
 const RING_OUTER_RADIUS = 60;
 const MARKER_MIN_SCALE = 0.55;
 const MARKER_MAX_SCALE = 1.3;
+// Multiplies the distance-based scale above when hovered (from either
+// side of the sync — this marker directly, or its row in ReviewList) —
+// the same "highlight" a review-list row gets, read the opposite way.
+const HOVER_SCALE_BOOST = 1.25;
 
 const BRASS = "#D4A24C";
 
@@ -88,7 +101,10 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
   const groupRef = useRef<THREE.Group>(null);
   const ringRef = useRef<THREE.Mesh>(null);
   const numeralRef = useRef<HTMLDivElement>(null);
-  const [hovered, setHovered] = useState(false);
+
+  const hovered = useProjectStore((state) => state.hoveredAnnotationId === annotation.id);
+  const setHoveredAnnotation = useProjectStore((state) => state.setHoveredAnnotation);
+  const clearHoveredAnnotation = useProjectStore((state) => state.clearHoveredAnnotation);
 
   const normal = useMemo(() => new THREE.Vector3(...annotation.normal).normalize(), [annotation.normal]);
   const position = useMemo(
@@ -97,6 +113,16 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
   );
   const quaternion = useMemo(() => new THREE.Quaternion().setFromUnitVectors(MARKER_UP, normal), [normal]);
 
+  // Registers this marker's own group into the viewport bridge so
+  // ReviewList.tsx (outside the Canvas) can ease the camera onto exactly
+  // this position/orientation for row clicks and J/K, without duplicating
+  // any of the position math above.
+  useEffect(() => {
+    const group = groupRef.current;
+    useProjectStore.getState().registerAnnotationObject(annotation.id, group);
+    return () => useProjectStore.getState().registerAnnotationObject(annotation.id, null);
+  }, [annotation.id]);
+
   useFrame(({ camera, controls }) => {
     const group = groupRef.current;
     if (!group) return;
@@ -104,7 +130,8 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
     const distance = camera.position.distanceTo(worldPosition);
     const orbit = controls as OrbitControlsImpl | null;
     const reference = orbit ? (orbit.minDistance + orbit.maxDistance) / 2 : distance;
-    const scale = THREE.MathUtils.clamp(reference / distance, MARKER_MIN_SCALE, MARKER_MAX_SCALE);
+    let scale = THREE.MathUtils.clamp(reference / distance, MARKER_MIN_SCALE, MARKER_MAX_SCALE);
+    if (hovered) scale *= HOVER_SCALE_BOOST;
     ringRef.current?.scale.setScalar(scale);
     if (numeralRef.current) numeralRef.current.style.transform = `scale(${scale})`;
   });
@@ -119,25 +146,24 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
     timelineRef.current?.kill();
   }, []);
 
+  const handlePointerEnter = () => setHoveredAnnotation(annotation.id);
+  const handlePointerLeave = () => {
+    // Only clear if this marker is still the one on record — guards
+    // against a stale pointerleave racing behind a newer hover (the same
+    // pattern BuildingModel's element hover already uses).
+    if (useProjectStore.getState().hoveredAnnotationId === annotation.id) {
+      clearHoveredAnnotation();
+    }
+  };
+
   const handleClick = (event: React.MouseEvent) => {
     event.stopPropagation();
     const group = groupRef.current;
     if (!group || !controls) return;
 
-    const worldTarget = group.getWorldPosition(new THREE.Vector3());
-    const worldNormal = MARKER_UP.clone()
-      .applyQuaternion(group.getWorldQuaternion(new THREE.Quaternion()))
-      .normalize();
-
-    const desiredDistance = THREE.MathUtils.clamp(
-      controls.minDistance * 1.5,
-      controls.minDistance,
-      controls.maxDistance,
-    );
-    const nextCameraPosition = worldTarget.clone().add(worldNormal.multiplyScalar(desiredDistance));
-
+    const { target, position: nextCameraPosition } = annotationCameraTarget(group, controls);
     timelineRef.current?.kill();
-    timelineRef.current = easeCameraTo(controls, camera, invalidate, worldTarget, nextCameraPosition);
+    timelineRef.current = easeCameraTo(controls, camera, invalidate, target, nextCameraPosition);
 
     if (annotation.elementId) {
       const element = useProjectStore.getState().elements.find((candidate) => candidate.id === annotation.elementId);
@@ -159,8 +185,8 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
         <div
           ref={numeralRef}
           className="pointer-events-auto flex flex-col items-center"
-          onPointerEnter={() => setHovered(true)}
-          onPointerLeave={() => setHovered(false)}
+          onPointerEnter={handlePointerEnter}
+          onPointerLeave={handlePointerLeave}
         >
           <button
             type="button"

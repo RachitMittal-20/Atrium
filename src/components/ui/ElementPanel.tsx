@@ -25,19 +25,25 @@
  *
  * Responsive: a right-docked sidebar above 900px (PIN_BREAKPOINT, the same
  * line the rest of the app collapses pinned scroll at), a draggable bottom
- * sheet at 70% height below it.
+ * sheet at 70% height below it. Below that line this panel also grows a
+ * SPEC/COMMENTS tab row (projectStore's mobileTab) so ReviewList.tsx's
+ * content can share this one sheet instead of stacking a second — see
+ * ReviewList.tsx's file header for the full mobile layout rationale.
  */
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { AnimatePresence, motion, type PanInfo } from "motion/react";
 import { useProjectStore } from "@/store/projectStore";
 import { DURATION, PIN_BREAKPOINT, easeCameraTo } from "@/lib/motion";
+import { relativeTime } from "@/lib/format";
+import { useIsMobile } from "@/lib/responsive";
 import { Label } from "./Label";
 import { Rule } from "./Rule";
 import { FieldRow } from "./FieldRow";
 import { Button } from "./Button";
+import { AnnotationRows } from "./ReviewList";
 import type { Element, ElementStatus } from "@/types/project";
 
 // State must read from shape and colour together, never colour alone — the
@@ -48,31 +54,6 @@ const STATUS_DOT_COLOR: Record<ElementStatus, string> = {
   Issue: "bg-clay",
   Revised: "bg-muted",
 };
-
-// Coarse but legible — "3 days ago" reads better in a review thread than
-// an exact timestamp, and nothing here needs second-level precision.
-function relativeTime(iso: string): string {
-  const deltaDays = Math.round((Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24));
-  if (deltaDays <= 0) return "today";
-  if (deltaDays === 1) return "1 day ago";
-  if (deltaDays < 7) return `${deltaDays} days ago`;
-  const deltaWeeks = Math.round(deltaDays / 7);
-  if (deltaWeeks < 5) return deltaWeeks === 1 ? "1 week ago" : `${deltaWeeks} weeks ago`;
-  const deltaMonths = Math.round(deltaDays / 30);
-  return deltaMonths <= 1 ? "1 month ago" : `${deltaMonths} months ago`;
-}
-
-function useIsMobile(breakpointPx: number): boolean {
-  const [isMobile, setIsMobile] = useState(false);
-  useEffect(() => {
-    const query = window.matchMedia(`(max-width: ${breakpointPx}px)`);
-    const update = () => setIsMobile(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, [breakpointPx]);
-  return isMobile;
-}
 
 // Eases OrbitControls' target and the camera's position onto the selected
 // element's live world bounding box, keeping the current viewing angle
@@ -124,6 +105,8 @@ export function ElementPanel() {
   useCameraFraming(element);
 
   const isMobile = useIsMobile(PIN_BREAKPOINT);
+  const mobileTab = useProjectStore((state) => state.mobileTab);
+  const setMobileTab = useProjectStore((state) => state.setMobileTab);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
 
@@ -195,63 +178,90 @@ export function ElementPanel() {
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-6 pb-6">
-            <h2 className="font-display text-lg text-ink">{element.name}</h2>
-
-            <div className="mt-3 flex items-center gap-2">
-              <span className={`h-2 w-2 rounded-full ${STATUS_DOT_COLOR[element.status]}`} aria-hidden="true" />
-              <span className="font-mono text-2xs uppercase tracking-[0.18em] text-ink">{element.status}</span>
-            </div>
-
-            <Rule className="my-5" label="Specification" />
-            <div>
-              {Object.entries(element.specification).map(([key, value], index, all) => (
-                <FieldRow
-                  key={key}
-                  label={key}
-                  value={value}
-                  className={index < all.length - 1 ? "border-b border-rule" : ""}
-                />
+          {/* Below PIN_BREAKPOINT this sheet is shared with ReviewList's
+              content instead of stacking a second sheet on top of this
+              one — see ReviewList.tsx's file header. Desktop never renders
+              this row; mobileTab is meaningless there. */}
+          {isMobile && (
+            <div className="flex gap-1 px-6 pb-4" role="tablist">
+              {(["spec", "comments"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={mobileTab === tab}
+                  onClick={() => setMobileTab(tab)}
+                  className={`flex-1 border px-3 py-1.5 font-mono text-3xs uppercase tracking-[0.18em] transition-colors ${
+                    mobileTab === tab ? "border-brass text-brass" : "border-rule text-faint hover:text-ink"
+                  }`}
+                >
+                  {tab === "spec" ? "Spec" : "Comments"}
+                </button>
               ))}
             </div>
+          )}
 
-            <Rule className="my-5" />
-            <FieldRow label="Responsible party" value={element.responsibleParty} />
-            <FieldRow label="Last updated" value={relativeTime(element.lastUpdated)} />
+          {isMobile && mobileTab === "comments" ? (
+            <AnnotationRows />
+          ) : (
+            <div className="flex-1 overflow-y-auto px-6 pb-6">
+              <h2 className="font-display text-lg text-ink">{element.name}</h2>
 
-            <Rule className="my-5" label="Comments" />
-            {thread.length === 0 ? (
-              <p className="font-mono text-2xs text-faint">No comments on this element</p>
-            ) : (
-              <ul className="flex flex-col gap-4">
-                {thread.map((annotation) => (
-                  <li key={annotation.id} className="flex flex-col gap-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-2xs text-ink">{annotation.author}</span>
-                      <span className="font-mono text-3xs text-faint">{relativeTime(annotation.createdAt)}</span>
-                    </div>
-                    <p className="text-2xs text-muted">{annotation.body}</p>
-                    <span
-                      className={`font-mono text-3xs uppercase tracking-[0.18em] ${
-                        annotation.status === "Resolved" ? "text-verdigris" : "text-brass"
-                      }`}
-                    >
-                      {annotation.status}
-                    </span>
-                    {annotation.replies.map((reply) => (
-                      <div key={reply.id} className="mt-1 ml-4 flex flex-col gap-1 border-l border-rule pl-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-3xs text-ink">{reply.author}</span>
-                          <span className="font-mono text-3xs text-faint">{relativeTime(reply.createdAt)}</span>
-                        </div>
-                        <p className="text-2xs text-muted">{reply.body}</p>
-                      </div>
-                    ))}
-                  </li>
+              <div className="mt-3 flex items-center gap-2">
+                <span className={`h-2 w-2 rounded-full ${STATUS_DOT_COLOR[element.status]}`} aria-hidden="true" />
+                <span className="font-mono text-2xs uppercase tracking-[0.18em] text-ink">{element.status}</span>
+              </div>
+
+              <Rule className="my-5" label="Specification" />
+              <div>
+                {Object.entries(element.specification).map(([key, value], index, all) => (
+                  <FieldRow
+                    key={key}
+                    label={key}
+                    value={value}
+                    className={index < all.length - 1 ? "border-b border-rule" : ""}
+                  />
                 ))}
-              </ul>
-            )}
-          </div>
+              </div>
+
+              <Rule className="my-5" />
+              <FieldRow label="Responsible party" value={element.responsibleParty} />
+              <FieldRow label="Last updated" value={relativeTime(element.lastUpdated)} />
+
+              <Rule className="my-5" label="Comments" />
+              {thread.length === 0 ? (
+                <p className="font-mono text-2xs text-faint">No comments on this element</p>
+              ) : (
+                <ul className="flex flex-col gap-4">
+                  {thread.map((annotation) => (
+                    <li key={annotation.id} className="flex flex-col gap-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-2xs text-ink">{annotation.author}</span>
+                        <span className="font-mono text-3xs text-faint">{relativeTime(annotation.createdAt)}</span>
+                      </div>
+                      <p className="text-2xs text-muted">{annotation.body}</p>
+                      <span
+                        className={`font-mono text-3xs uppercase tracking-[0.18em] ${
+                          annotation.status === "Resolved" ? "text-verdigris" : "text-brass"
+                        }`}
+                      >
+                        {annotation.status}
+                      </span>
+                      {annotation.replies.map((reply) => (
+                        <div key={reply.id} className="mt-1 ml-4 flex flex-col gap-1 border-l border-rule pl-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-3xs text-ink">{reply.author}</span>
+                            <span className="font-mono text-3xs text-faint">{relativeTime(reply.createdAt)}</span>
+                          </div>
+                          <p className="text-2xs text-muted">{reply.body}</p>
+                        </div>
+                      ))}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="border-t border-rule px-6 py-5">
             <Button

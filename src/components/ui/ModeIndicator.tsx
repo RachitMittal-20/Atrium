@@ -18,11 +18,7 @@
 
 import { useEffect } from "react";
 import { useProjectStore } from "@/store/projectStore";
-
-function isTypingTarget(target: EventTarget | null): boolean {
-  const tag = (target as HTMLElement | null)?.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA";
-}
+import { isTypingTarget } from "@/lib/keyboard";
 
 export function ModeIndicator() {
   const mode = useProjectStore((state) => state.mode);
