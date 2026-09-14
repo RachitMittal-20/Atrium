@@ -6,7 +6,8 @@
  * Invitation. Chrome is minimal: the ATRIUM wordmark and a mono project
  * label float over the top-left corner, matching the Hero's chrome, over
  * the graphite ground showing through wherever the model doesn't.
- * ModeIndicator mirrors it top-right with the Review/Pin badge.
+ * ModeIndicator mirrors it top-right with the Review/Pin badge, and
+ * PresenceIndicator stacks directly below it with the same alignment.
  *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark
@@ -15,25 +16,32 @@
  * all. Everything else is wrapped in ProjectHydrator, which seeds
  * projectStore with this same data client-side — see that file's header
  * for why it does that in a useEffect rather than during render (a real
- * cross-request bug, not a style preference).
+ * cross-request bug, not a style preference). RealtimeProvider mounts
+ * the same way, for the same reason, to open live multi-reviewer sync's
+ * realtime channel — see its own header.
  *
  * loadInitialData falls back to the local seed data in
  * src/data/project.ts, and flags isDemoData, whenever Supabase isn't
  * configured, the project table is empty, or any part of the fetch
- * throws — DemoDataBadge surfaces that fallback in the corner. This
- * route must never ship a blank screen because a network call failed;
- * catching everything here and always returning a valid HydrationData
- * is what guarantees that.
+ * throws — DemoDataBadge surfaces that fallback in the corner, and
+ * RealtimeProvider/PresenceIndicator both skip realtime entirely rather
+ * than pretending to be live against a backend that was never reachable.
+ * This route must never ship a blank screen because a network call
+ * failed; catching everything here and always returning a valid
+ * HydrationData is what guarantees that.
  */
 import { Scene } from "@/components/three/Scene";
 import { SceneLoader } from "@/components/three/SceneLoader";
 import { Label } from "@/components/ui/Label";
 import { ElementPanel } from "@/components/ui/ElementPanel";
 import { ModeIndicator } from "@/components/ui/ModeIndicator";
+import { PresenceIndicator } from "@/components/ui/PresenceIndicator";
 import { ReviewList } from "@/components/ui/ReviewList";
 import { DemoDataBadge } from "@/components/ui/DemoDataBadge";
 import { Toast } from "@/components/ui/Toast";
+import { RemoteCommentToast } from "@/components/ui/RemoteCommentToast";
 import { ProjectHydrator } from "@/components/ProjectHydrator";
+import { RealtimeProvider } from "@/components/RealtimeProvider";
 import { getProject, getElements, getAnnotations } from "@/lib/queries";
 import { PROJECT, ELEMENTS, ANNOTATIONS } from "@/data/project";
 import type { HydrationData } from "@/store/projectStore";
@@ -69,6 +77,7 @@ export default async function ProjectPage() {
 
   return (
     <ProjectHydrator initial={initial}>
+      <RealtimeProvider projectId={initial.project.id} isDemoData={initial.isDemoData} />
       <main className="relative h-screen w-screen overflow-hidden bg-ground">
         <Scene className="h-full w-full" />
         <SceneLoader />
@@ -81,10 +90,12 @@ export default async function ProjectPage() {
         </div>
 
         <ModeIndicator />
+        <PresenceIndicator />
         <ReviewList />
         <ElementPanel />
         <DemoDataBadge />
         <Toast />
+        <RemoteCommentToast />
       </main>
     </ProjectHydrator>
   );

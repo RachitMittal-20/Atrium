@@ -55,16 +55,30 @@
  * (registerAnnotationObject) on mount, so ReviewList can read this exact
  * world position/orientation for its own camera-easing, without needing
  * a second copy of the position math.
+ *
+ * Remote arrival animation: if this marker's annotation.id matches
+ * projectStore's remotelyArrivedAnnotationId at the instant this
+ * component mounts (snapshotted once via useState — see isRemoteArrival
+ * below), it fades its ring in from transparent, pulses brass once past
+ * its resting scale, then settles — see arrivalMultiplier's comment for
+ * how that composes with the distance/hover scale above instead of
+ * fighting it. Only ever true for annotations projectStore.ts's
+ * mergeRemoteAnnotation appended (a genuinely new remote pin); pinning
+ * your own comment, or a page load that already has this annotation, both
+ * mount with isRemoteArrival false and skip the animation entirely. This
+ * effect never touches the camera — that's ReviewList.tsx/handleClick's
+ * job, deliberately not this one, so a remote comment arriving never
+ * hijacks whatever the viewer is currently looking at.
  */
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import type gsap from "gsap";
+import gsap from "gsap";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { annotationCameraTarget, easeCameraTo } from "@/lib/motion";
+import { annotationCameraTarget, DURATION, EASE_WEIGHTED, easeCameraTo } from "@/lib/motion";
 import { useProjectStore } from "@/store/projectStore";
 import type { Annotation } from "@/types/project";
 
@@ -90,6 +104,15 @@ const MARKER_MAX_SCALE = 1.3;
 const HOVER_SCALE_BOOST = 1.25;
 
 const BRASS = "#D4A24C";
+const RING_OPACITY = 0.9;
+
+// The arrival pulse's peak, as a multiplier on top of the marker's normal
+// resting scale — an overshoot past 1, not a replacement for it, which is
+// what makes it read as "pulses once" rather than "pops to a fixed size".
+const ARRIVAL_PULSE_SCALE = 1.6;
+// The scale a newly-arrived marker starts at before its fade-in tween
+// runs — small enough that the growth into place reads as an entrance.
+const ARRIVAL_START_SCALE = 0.3;
 
 interface AnnotationMarkerProps {
   annotation: Annotation;
@@ -100,11 +123,36 @@ interface AnnotationMarkerProps {
 export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) {
   const groupRef = useRef<THREE.Group>(null);
   const ringRef = useRef<THREE.Mesh>(null);
+  const materialRef = useRef<THREE.MeshBasicMaterial>(null);
   const numeralRef = useRef<HTMLDivElement>(null);
 
   const hovered = useProjectStore((state) => state.hoveredAnnotationId === annotation.id);
   const setHoveredAnnotation = useProjectStore((state) => state.setHoveredAnnotation);
   const clearHoveredAnnotation = useProjectStore((state) => state.clearHoveredAnnotation);
+
+  // Snapshotted once, at mount, rather than read reactively: this marker
+  // only ever mounts fresh the instant its annotation.id is appended to
+  // the store (BuildingModel.tsx keys the list by annotation.id), so
+  // "was I the one the store just flagged as remote" is exactly a mount-
+  // time question. Reading remotelyArrivedAnnotationId reactively instead
+  // would also fire this animation again for every *other* marker on the
+  // next remote arrival, which is not what "arrival" means for them.
+  const [isRemoteArrival] = useState(
+    () => useProjectStore.getState().remotelyArrivedAnnotationId === annotation.id,
+  );
+  // A plain mutable object, held (not set) through useState's lazy
+  // initializer — a ref's `.current` can't be read during render (this
+  // value feeds arrivalMultiplier.value into useFrame's per-frame scale
+  // below), but the object identity itself still only needs to be
+  // created once. gsap tweens object properties, not refs/state, and
+  // useFrame multiplies this into the per-frame distance/hover scale it
+  // already computes — composing with that existing write (the same way
+  // HOVER_SCALE_BOOST already does) rather than the two fighting over
+  // ringRef's scale each frame. Never updated via its setter — mutated
+  // directly by the gsap tween below instead, deliberately bypassing
+  // React's render cycle for a per-frame value the same way ringRef's
+  // own scale already does.
+  const [arrivalMultiplier] = useState(() => ({ value: isRemoteArrival ? ARRIVAL_START_SCALE : 1 }));
 
   const normal = useMemo(() => new THREE.Vector3(...annotation.normal).normalize(), [annotation.normal]);
   const position = useMemo(
@@ -132,6 +180,7 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
     const reference = orbit ? (orbit.minDistance + orbit.maxDistance) / 2 : distance;
     let scale = THREE.MathUtils.clamp(reference / distance, MARKER_MIN_SCALE, MARKER_MAX_SCALE);
     if (hovered) scale *= HOVER_SCALE_BOOST;
+    scale *= arrivalMultiplier.value;
     ringRef.current?.scale.setScalar(scale);
     if (numeralRef.current) numeralRef.current.style.transform = `scale(${scale})`;
   });
@@ -145,6 +194,47 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
   useEffect(() => () => {
     timelineRef.current?.kill();
   }, []);
+
+  // The arrival animation itself: fade the ring in from transparent while
+  // growing to resting scale, then one brass pulse past resting scale,
+  // then settle back — see the constants above for each phase's target.
+  // onUpdate calls invalidate() every tick because Scene.tsx runs
+  // frameloop="demand" (see its header): nothing here would ever actually
+  // redraw otherwise, the exact same reason easeCameraTo in lib/motion.ts
+  // does the same thing for camera tweens.
+  useEffect(() => {
+    if (!isRemoteArrival) return;
+    const material = materialRef.current;
+
+    const timeline = gsap.timeline({
+      onUpdate: invalidate,
+      onComplete: () => {
+        // Only clear if this is still the annotation on record — guards
+        // against this stale completion racing behind a newer arrival
+        // that's since overwritten the flag (mirrors handlePointerLeave's
+        // same guard below for hover).
+        if (useProjectStore.getState().remotelyArrivedAnnotationId === annotation.id) {
+          useProjectStore.getState().clearRemotelyArrived();
+        }
+      },
+    });
+
+    timeline.to(arrivalMultiplier, { value: 1, duration: DURATION.fast, ease: EASE_WEIGHTED }, 0);
+    if (material) {
+      timeline.fromTo(
+        material,
+        { opacity: 0 },
+        { opacity: RING_OPACITY, duration: DURATION.fast, ease: EASE_WEIGHTED },
+        0,
+      );
+    }
+    timeline.to(arrivalMultiplier, { value: ARRIVAL_PULSE_SCALE, duration: DURATION.instant, ease: EASE_WEIGHTED });
+    timeline.to(arrivalMultiplier, { value: 1, duration: DURATION.slow, ease: EASE_WEIGHTED });
+
+    return () => {
+      timeline.kill();
+    };
+  }, [annotation.id, invalidate, isRemoteArrival, arrivalMultiplier]);
 
   const handlePointerEnter = () => setHoveredAnnotation(annotation.id);
   const handlePointerLeave = () => {
@@ -178,7 +268,13 @@ export function AnnotationMarker({ annotation, number }: AnnotationMarkerProps) 
           front of it without any extra raycasting. */}
       <mesh ref={ringRef}>
         <ringGeometry args={[RING_INNER_RADIUS, RING_OUTER_RADIUS, 32]} />
-        <meshBasicMaterial color={BRASS} side={THREE.DoubleSide} transparent opacity={0.9} />
+        <meshBasicMaterial
+          ref={materialRef}
+          color={BRASS}
+          side={THREE.DoubleSide}
+          transparent
+          opacity={isRemoteArrival ? 0 : RING_OPACITY}
+        />
       </mesh>
 
       <Html center occlude pointerEvents="none">

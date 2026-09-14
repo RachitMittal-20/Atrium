@@ -1,11 +1,13 @@
 /**
  * src/lib/supabase.ts
  *
- * The one Supabase client this app creates — used from both sides now:
+ * The one Supabase client this app creates — used from three places now:
  * src/app/project/page.tsx calls it server-side (a Next.js Server
- * Component, not a browser) to load initial data, and projectStore.ts
- * calls it client-side to persist a pinned comment. Typed against the
- * schema in src/types/database.ts — generated from the migration in
+ * Component, not a browser) to load initial data, projectStore.ts calls
+ * it client-side to persist a pinned comment, and src/lib/realtime.ts
+ * calls it client-side to open the Postgres Changes + presence channel
+ * live multi-reviewer sync runs on. Typed against the schema in
+ * src/types/database.ts — generated from the migration in
  * supabase/migrations/, never hand-edited; regenerate that file instead
  * if the schema changes.
  *
@@ -15,7 +17,8 @@
  * seed data in src/data/project.ts whenever Supabase isn't reachable or
  * configured) needs a value it can check, not a module that crashes on
  * import before any fallback logic gets a chance to run. src/lib/
- * queries.ts is the only place that reads this export.
+ * queries.ts and src/lib/realtime.ts are the only two places that read
+ * this export directly — everything else goes through one of those.
  *
  * `persistSession`/`autoRefreshToken` are off: there's no auth flow, so
  * there's no session to persist, and leaving them on tries to touch

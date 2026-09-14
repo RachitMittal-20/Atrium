@@ -11,9 +11,10 @@
  * always runs, synchronously, so that fallback is never visible.
  *
  * `isDemoData` says which of those two the store is currently holding —
- * DemoDataBadge.tsx reads it to show the corner label, and
- * pinAnnotation() (below) reads it to decide whether a new pin is worth
- * even trying to persist.
+ * DemoDataBadge.tsx reads it to show the corner label, pinAnnotation()
+ * reads it to decide whether a new pin is worth even trying to persist,
+ * and src/components/RealtimeProvider.tsx reads it to decide whether
+ * there's a real backend worth subscribing to at all.
  *
  * Still the one bridge across the Canvas boundary — BuildingModel writes
  * hoveredElementId/selectedElementId from inside the Canvas, any DOM UI
@@ -47,13 +48,31 @@
  * ReviewList.tsx coordinate on below PIN_BREAKPOINT, where they share a
  * single bottom sheet (SPEC/COMMENTS tabs) rather than stacking two —
  * see ReviewList.tsx's file header for the full mobile layout rationale.
+ *
+ * Live multi-reviewer sync (mergeRemoteAnnotation, mergeRemoteReply,
+ * remoteToast, presentReviewers, connectionStatus, selfReviewerId) is
+ * driven entirely by src/components/RealtimeProvider.tsx from a
+ * useEffect — never at module scope or during render, for the same
+ * cross-request SSR reason ProjectHydrator.tsx's header explains at
+ * length: this store is one Node-process-wide singleton, and Next.js
+ * server-renders "use client" components by default.
+ *
+ * mergeRemoteAnnotation is also this store's dedupe point for a client's
+ * own optimistic writes: pinAnnotation always appends the optimistic row
+ * (with a client-generated id) to `annotations` before any network call,
+ * so by the time that same insert echoes back over realtime, its id is
+ * already present — mergeRemoteAnnotation sees `exists === true` and
+ * quietly refreshes the row in place instead of appending a duplicate or
+ * firing the arrival toast/pulse a second time. Only a genuinely new id
+ * (someone else's pin) takes the "append + announce" branch.
  */
 import { create } from "zustand";
 import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { createAnnotation } from "@/lib/queries";
+import type { ConnectionStatus, Reviewer } from "@/lib/realtime";
 import { ELEMENTS, ANNOTATIONS, PROJECT } from "@/data/project";
-import type { Annotation, Element, Project, Vec3 } from "@/types/project";
+import type { Annotation, AnnotationReply, Element, Project, Vec3 } from "@/types/project";
 
 interface ViewportBridge {
   controls: OrbitControlsImpl | null;
@@ -89,6 +108,11 @@ export interface PinAnnotationInput {
 export interface ToastState {
   message: string;
   onRetry: () => void;
+}
+
+/** Just enough to render "New comment from X" — see RemoteCommentToast.tsx. */
+export interface RemoteToastState {
+  author: string;
 }
 
 interface ProjectState {
@@ -157,9 +181,11 @@ interface ProjectState {
   hoveredAnnotationId: string | null;
   setHoveredAnnotation: (id: string) => void;
   clearHoveredAnnotation: () => void;
-  /** Set by pinAnnotation; ReviewList.tsx clears it itself after its
-   *  flash animation finishes — see that file for why the timeout lives
-   *  there. */
+  /** Set by pinAnnotation *and* mergeRemoteAnnotation; ReviewList.tsx
+   *  clears it itself after its flash animation finishes — see that file
+   *  for why the timeout lives there. Reused as-is for a remote arrival's
+   *  row flash rather than adding a second, parallel "flash this row"
+   *  field. */
   recentlyAddedAnnotationId: string | null;
   clearRecentlyAdded: () => void;
   mobileTab: MobileTab;
@@ -180,6 +206,54 @@ interface ProjectState {
   /** Called from AnnotationMarker's ref effect on mount/unmount. */
   registerAnnotationObject: (annotationId: string, object: THREE.Object3D | null) => void;
   getAnnotationObject: (annotationId: string) => THREE.Object3D | null;
+
+  // --- Live multi-reviewer sync (see file header) ---
+  /** Set only on a genuinely new remote annotation (never on your own
+   *  optimistic echo) — the one-shot signal AnnotationMarker.tsx snapshots
+   *  at mount to decide whether *this* marker plays its fade-in +
+   *  brass-pulse arrival animation. Cleared by that same marker once its
+   *  animation finishes, mirroring how recentlyAddedAnnotationId is
+   *  cleared by ReviewList rather than by whoever set it. */
+  remotelyArrivedAnnotationId: string | null;
+  clearRemotelyArrived: () => void;
+  /** Merges one annotation from a Postgres Changes payload (insert or
+   *  update) into local state. An id already present is treated as this
+   *  client's own optimistic write echoing back — updated in place,
+   *  silently, with no toast/pulse/flash. An id not yet present is a
+   *  genuinely new remote pin — appended, and flagged for the row flash,
+   *  the marker's arrival animation, and the corner toast all at once. */
+  mergeRemoteAnnotation: (annotation: Annotation) => void;
+  /** Merges one reply from a Postgres Changes payload into whichever
+   *  annotation it belongs to. annotation_replies carries no project_id
+   *  (see src/lib/realtime.ts's header), so every project's reply inserts
+   *  reach this action — a reply whose annotation_id isn't in local state
+   *  simply matches nothing in the .map below and is silently dropped,
+   *  which is this store's client-side stand-in for the server-side
+   *  project filter the table doesn't support. Also dedupes a reply this
+   *  client authored itself the same way mergeRemoteAnnotation does. */
+  mergeRemoteReply: (annotationId: string, reply: AnnotationReply) => void;
+  /** The corner "New comment from X" toast — see RemoteCommentToast.tsx,
+   *  which owns the auto-dismiss timer itself (the same split Toast.tsx
+   *  uses: this store just holds the current message). */
+  remoteToast: RemoteToastState | null;
+  dismissRemoteToast: () => void;
+  /** Every reviewer currently present on the project's realtime channel,
+   *  replaced wholesale on each presence sync — see
+   *  src/components/ui/PresenceIndicator.tsx. Defaults to `[]`, not
+   *  undefined, so that component never needs to null-check it. */
+  presentReviewers: Reviewer[];
+  setPresentReviewers: (reviewers: Reviewer[]) => void;
+  /** This browser tab's own presence id, set once by RealtimeProvider —
+   *  lets PresenceIndicator.tsx tell "you" apart from other chips without
+   *  threading the Reviewer object itself through the store. */
+  selfReviewerId: string | null;
+  setSelfReviewer: (id: string) => void;
+  /** "connecting" until the channel first subscribes, "connected" while
+   *  live, "reconnecting" the moment it drops — see src/lib/realtime.ts's
+   *  header for the backoff behind this. Never silently stays
+   *  "connected" once a real drop has happened. */
+  connectionStatus: ConnectionStatus;
+  setConnectionStatus: (status: ConnectionStatus) => void;
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => {
@@ -297,5 +371,39 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       annotationObjects[annotationId] = object;
     },
     getAnnotationObject: (annotationId) => annotationObjects[annotationId] ?? null,
+
+    remotelyArrivedAnnotationId: null,
+    clearRemotelyArrived: () => set({ remotelyArrivedAnnotationId: null }),
+    mergeRemoteAnnotation: (annotation) =>
+      set((state) => {
+        const exists = state.annotations.some((existing) => existing.id === annotation.id);
+        if (exists) {
+          return {
+            annotations: state.annotations.map((existing) => (existing.id === annotation.id ? annotation : existing)),
+          };
+        }
+        return {
+          annotations: [...state.annotations, annotation],
+          recentlyAddedAnnotationId: annotation.id,
+          remotelyArrivedAnnotationId: annotation.id,
+          remoteToast: { author: annotation.author },
+        };
+      }),
+    mergeRemoteReply: (annotationId, reply) =>
+      set((state) => ({
+        annotations: state.annotations.map((annotation) => {
+          if (annotation.id !== annotationId) return annotation;
+          if (annotation.replies.some((existing) => existing.id === reply.id)) return annotation;
+          return { ...annotation, replies: [...annotation.replies, reply] };
+        }),
+      })),
+    remoteToast: null,
+    dismissRemoteToast: () => set({ remoteToast: null }),
+    presentReviewers: [],
+    setPresentReviewers: (reviewers) => set({ presentReviewers: reviewers }),
+    selfReviewerId: null,
+    setSelfReviewer: (id) => set({ selfReviewerId: id }),
+    connectionStatus: "connecting",
+    setConnectionStatus: (status) => set({ connectionStatus: status }),
   };
 });

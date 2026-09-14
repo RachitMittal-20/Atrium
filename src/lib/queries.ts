@@ -5,7 +5,10 @@
  * mapping the snake_case rows in src/types/database.ts (generated from
  * supabase/migrations/) onto the camelCase app types in
  * src/types/project.ts that every component already trusts. Nothing
- * outside this file imports src/lib/supabase.ts directly.
+ * outside this file imports src/lib/supabase.ts directly except
+ * src/lib/realtime.ts, which needs the same client to open its channel —
+ * see that file's header for why it's a second, deliberate exception
+ * rather than routing through here.
  *
  * Every function here throws on failure — including "Supabase isn't
  * configured" — rather than resolving with an empty array or null as a
@@ -17,6 +20,13 @@
  * catches createAnnotation's throw to roll an optimistic pin back and
  * show a retry toast. Neither would be possible if failure and "empty"
  * looked the same.
+ *
+ * mapAnnotation/mapReply and the Row types they consume are exported, not
+ * private, for exactly one other caller: src/lib/realtime.ts maps the raw
+ * rows a Postgres Changes payload carries through these same functions,
+ * so a remote comment's arrival is shaped identically to one loaded by
+ * getAnnotations above — one mapping implementation, not two that could
+ * drift apart.
  */
 import { supabase } from "@/lib/supabase";
 import type { Database } from "@/types/database";
@@ -24,8 +34,8 @@ import type { Annotation, AnnotationReply, AnnotationStatus, Element, Project, V
 
 type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
 type ElementRow = Database["public"]["Tables"]["elements"]["Row"];
-type AnnotationRow = Database["public"]["Tables"]["annotations"]["Row"];
-type AnnotationReplyRow = Database["public"]["Tables"]["annotation_replies"]["Row"];
+export type AnnotationRow = Database["public"]["Tables"]["annotations"]["Row"];
+export type AnnotationReplyRow = Database["public"]["Tables"]["annotation_replies"]["Row"];
 
 // Every exported function starts with this — one place that turns "not
 // configured" into a thrown error instead of every call site null-
@@ -66,11 +76,11 @@ function mapElement(row: ElementRow): Element {
   };
 }
 
-function mapReply(row: AnnotationReplyRow): AnnotationReply {
+export function mapReply(row: AnnotationReplyRow): AnnotationReply {
   return { id: row.id, author: row.author, body: row.body, createdAt: row.created_at };
 }
 
-function mapAnnotation(row: AnnotationRow, replies: AnnotationReply[]): Annotation {
+export function mapAnnotation(row: AnnotationRow, replies: AnnotationReply[]): Annotation {
   return {
     id: row.id,
     elementId: row.element_id,
