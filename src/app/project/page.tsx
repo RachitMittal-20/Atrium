@@ -7,6 +7,23 @@
  * label float over the top-left corner, matching the Hero's chrome, over
  * the graphite ground showing through wherever the model doesn't.
  * ModeIndicator mirrors it top-right with the Review/Pin badge.
+ *
+ * A Server Component, not a client one: loadInitialData below runs on
+ * the server, before this page ever reaches the browser. The wordmark
+ * block's project label is rendered directly from that server-fetched
+ * data — real data in the first paint, no store read needed for it at
+ * all. Everything else is wrapped in ProjectHydrator, which seeds
+ * projectStore with this same data client-side — see that file's header
+ * for why it does that in a useEffect rather than during render (a real
+ * cross-request bug, not a style preference).
+ *
+ * loadInitialData falls back to the local seed data in
+ * src/data/project.ts, and flags isDemoData, whenever Supabase isn't
+ * configured, the project table is empty, or any part of the fetch
+ * throws — DemoDataBadge surfaces that fallback in the corner. This
+ * route must never ship a blank screen because a network call failed;
+ * catching everything here and always returning a valid HydrationData
+ * is what guarantees that.
  */
 import { Scene } from "@/components/three/Scene";
 import { SceneLoader } from "@/components/three/SceneLoader";
@@ -14,21 +31,61 @@ import { Label } from "@/components/ui/Label";
 import { ElementPanel } from "@/components/ui/ElementPanel";
 import { ModeIndicator } from "@/components/ui/ModeIndicator";
 import { ReviewList } from "@/components/ui/ReviewList";
+import { DemoDataBadge } from "@/components/ui/DemoDataBadge";
+import { Toast } from "@/components/ui/Toast";
+import { ProjectHydrator } from "@/components/ProjectHydrator";
+import { getProject, getElements, getAnnotations } from "@/lib/queries";
+import { PROJECT, ELEMENTS, ANNOTATIONS } from "@/data/project";
+import type { HydrationData } from "@/store/projectStore";
 
-export default function ProjectPage() {
+// Without this, Next.js prerenders this route once at build time (it has
+// no dynamic segment or request-time API to force the other way on its
+// own) — loadInitialData would only ever run during `next build`, baking
+// in whatever annotations existed then for every visitor after. This is
+// a live review tool; every request needs its own fetch.
+export const dynamic = "force-dynamic";
+
+async function loadInitialData(): Promise<HydrationData> {
+  try {
+    const project = await getProject();
+    if (!project) {
+      throw new Error("Supabase returned no project row — has the seed migration been applied?");
+    }
+    const [elements, annotations] = await Promise.all([getElements(project.id), getAnnotations(project.id)]);
+    return { project, elements, annotations, isDemoData: false };
+  } catch (error) {
+    // Deliberately broad: missing env vars, an unreachable project, an
+    // RLS/policy error, an empty table — every one of them lands here,
+    // and every one of them means the same thing to this route: show the
+    // local demo data instead of a blank or half-broken page.
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[project] Falling back to local demo data:", message);
+    return { project: PROJECT, elements: ELEMENTS, annotations: ANNOTATIONS, isDemoData: true };
+  }
+}
+
+export default async function ProjectPage() {
+  const initial = await loadInitialData();
+
   return (
-    <main className="relative h-screen w-screen overflow-hidden bg-ground">
-      <Scene className="h-full w-full" />
-      <SceneLoader />
+    <ProjectHydrator initial={initial}>
+      <main className="relative h-screen w-screen overflow-hidden bg-ground">
+        <Scene className="h-full w-full" />
+        <SceneLoader />
 
-      <div className="pointer-events-none absolute left-6 top-6 flex flex-col gap-2 sm:left-10 sm:top-8">
-        <span className="font-display text-sm tracking-wide text-ink">ATRIUM</span>
-        <Label>Project 001 — Meridian House</Label>
-      </div>
+        <div className="pointer-events-none absolute left-6 top-6 flex flex-col gap-2 sm:left-10 sm:top-8">
+          <span className="font-display text-sm tracking-wide text-ink">ATRIUM</span>
+          <Label>
+            Project {initial.project.code} — {initial.project.name}
+          </Label>
+        </div>
 
-      <ModeIndicator />
-      <ReviewList />
-      <ElementPanel />
-    </main>
+        <ModeIndicator />
+        <ReviewList />
+        <ElementPanel />
+        <DemoDataBadge />
+        <Toast />
+      </main>
+    </ProjectHydrator>
   );
 }

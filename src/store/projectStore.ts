@@ -1,18 +1,24 @@
 /**
  * src/store/projectStore.ts
  *
- * The single store for everything project-related, replacing the earlier
- * selectionStore.ts (hover/selection state is still exactly here, just
- * grown to hold the project it's actually selecting *within*). Still the
- * one bridge across the Canvas boundary — BuildingModel writes
+ * The single store for everything project-related. Starts seeded from
+ * the local demo data in src/data/project.ts (see the bottom of this
+ * file) purely as a safe pre-hydration default — src/components/
+ * ProjectHydrator.tsx overwrites it with server-fetched data via
+ * hydrate() during the very first client render, before anything else
+ * reads the store. If hydration somehow never ran, the app would still
+ * show the local demo data rather than an empty one; in practice it
+ * always runs, synchronously, so that fallback is never visible.
+ *
+ * `isDemoData` says which of those two the store is currently holding —
+ * DemoDataBadge.tsx reads it to show the corner label, and
+ * pinAnnotation() (below) reads it to decide whether a new pin is worth
+ * even trying to persist.
+ *
+ * Still the one bridge across the Canvas boundary — BuildingModel writes
  * hoveredElementId/selectedElementId from inside the Canvas, any DOM UI
  * (an inspector panel, a comment thread) reads them and the underlying
  * Element/Annotation data from outside it.
- *
- * Seeded synchronously from src/data/project.ts at store creation — there
- * is no async load yet, this *is* "the loaded project" until Supabase
- * persistence (P15/P16) replaces the source, at which point only this
- * file's initial state needs to change, not its shape or its consumers.
  *
  * Also carries the "viewport bridge": the OrbitControls instance (Scene.tsx
  * registers it once mounted) and each interactive mesh's/annotation's live
@@ -28,9 +34,9 @@
  * comment" button drives via enterPinMode(). `pendingPin` is the
  * point+normal+mesh a click captured while in pin mode, read by
  * AnnotationComposer.tsx to render the composer and, on submit, turned
- * into a real Annotation via addAnnotation — which also stamps
- * `recentlyAddedAnnotationId`, so ReviewList.tsx can flash the new row
- * without needing its own "was this here before" bookkeeping.
+ * into a real Annotation via pinAnnotation() — see that action's own
+ * comment for the full optimistic-write story, which is the reason this
+ * store talks to src/lib/queries.ts at all.
  *
  * `hoveredAnnotationId` is the two-way hover bridge between
  * AnnotationMarker.tsx (a 3D ring) and ReviewList.tsx (a DOM row) — either
@@ -45,6 +51,7 @@
 import { create } from "zustand";
 import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { createAnnotation } from "@/lib/queries";
 import { ELEMENTS, ANNOTATIONS, PROJECT } from "@/data/project";
 import type { Annotation, Element, Project, Vec3 } from "@/types/project";
 
@@ -64,13 +71,63 @@ export interface PendingPin {
   meshName: string | null;
 }
 
+export interface HydrationData {
+  project: Project;
+  elements: Element[];
+  annotations: Annotation[];
+  isDemoData: boolean;
+}
+
+export interface PinAnnotationInput {
+  elementId: string | null;
+  position: Vec3;
+  normal: Vec3;
+  author: string;
+  body: string;
+}
+
+export interface ToastState {
+  message: string;
+  onRetry: () => void;
+}
+
 interface ProjectState {
   // --- Project data ---
   project: Project;
   elements: Element[];
   annotations: Annotation[];
-  /** Appends a freshly pinned Annotation and marks it for ReviewList's flash. */
-  addAnnotation: (annotation: Annotation) => void;
+  /** True until src/components/ProjectHydrator.tsx's first-render call to
+   *  hydrate() replaces this with server-fetched data — see file header. */
+  isDemoData: boolean;
+  /** The one call ProjectHydrator.tsx makes, once, on mount. */
+  hydrate: (data: HydrationData) => void;
+
+  /**
+   * Pins a new annotation. Applies it to local state — and thus renders
+   * its marker — synchronously, before any network call is made: pinning
+   * a comment has to feel instant, and a 3D marker appearing the instant
+   * you click Pin is the whole point. What happens next depends on
+   * isDemoData:
+   *   - Demo data: there's no real backend to persist to (Supabase was
+   *     never reachable this session), so the optimistic row simply *is*
+   *     the final one. Attempting a write here would only fail again and
+   *     roll back a marker the user has no way to actually save — this
+   *     is exactly the "insurance for the day you record the video" case,
+   *     and the insurance only works if pinning still behaves like a
+   *     real feature in demo mode instead of visibly failing every time.
+   *   - Live data: persists via src/lib/queries.ts's createAnnotation,
+   *     using the *same* client-generated id the optimistic row already
+   *     has (never a swapped-in server id) so a successful save never
+   *     remounts the marker. On failure, the optimistic row is removed —
+   *     never leave a marker on screen that isn't actually saved — and a
+   *     toast offers Retry, which just calls this same action again.
+   */
+  pinAnnotation: (input: PinAnnotationInput) => Promise<void>;
+
+  // --- Toast (surfaced by pinAnnotation's failure path) ---
+  toast: ToastState | null;
+  showToast: (message: string, onRetry: () => void) => void;
+  dismissToast: () => void;
 
   // --- Selection (formerly selectionStore) ---
   hoveredElementId: string | null;
@@ -100,8 +157,9 @@ interface ProjectState {
   hoveredAnnotationId: string | null;
   setHoveredAnnotation: (id: string) => void;
   clearHoveredAnnotation: () => void;
-  /** Set by addAnnotation; ReviewList.tsx clears it itself after its flash
-   *  animation finishes — see that file for why the timeout lives there. */
+  /** Set by pinAnnotation; ReviewList.tsx clears it itself after its
+   *  flash animation finishes — see that file for why the timeout lives
+   *  there. */
   recentlyAddedAnnotationId: string | null;
   clearRecentlyAdded: () => void;
   mobileTab: MobileTab;
@@ -133,11 +191,69 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     project: PROJECT,
     elements: ELEMENTS,
     annotations: ANNOTATIONS,
-    addAnnotation: (annotation) =>
+    isDemoData: true,
+    hydrate: (data) =>
+      set({
+        project: data.project,
+        elements: data.elements,
+        annotations: data.annotations,
+        isDemoData: data.isDemoData,
+      }),
+
+    pinAnnotation: async (input) => {
+      const id = crypto.randomUUID();
+      const optimistic: Annotation = {
+        id,
+        elementId: input.elementId,
+        position: input.position,
+        normal: input.normal,
+        author: input.author,
+        body: input.body,
+        createdAt: new Date().toISOString(),
+        status: "Open",
+        replies: [],
+      };
+
       set((state) => ({
-        annotations: [...state.annotations, annotation],
-        recentlyAddedAnnotationId: annotation.id,
-      })),
+        annotations: [...state.annotations, optimistic],
+        recentlyAddedAnnotationId: id,
+      }));
+
+      if (get().isDemoData) {
+        return;
+      }
+
+      try {
+        const saved = await createAnnotation({
+          id,
+          projectId: get().project.id,
+          elementId: input.elementId,
+          position: input.position,
+          normal: input.normal,
+          author: input.author,
+          body: input.body,
+        });
+        // Same id throughout, so this only refreshes server-authoritative
+        // fields (createdAt) in place — no marker remounts.
+        set((state) => ({
+          annotations: state.annotations.map((annotation) => (annotation.id === id ? saved : annotation)),
+        }));
+      } catch (error) {
+        set((state) => ({
+          annotations: state.annotations.filter((annotation) => annotation.id !== id),
+        }));
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("pinAnnotation failed:", message);
+        get().showToast("Could not save comment — retry", () => {
+          get().dismissToast();
+          void get().pinAnnotation(input);
+        });
+      }
+    },
+
+    toast: null,
+    showToast: (message, onRetry) => set({ toast: { message, onRetry } }),
+    dismissToast: () => set({ toast: null }),
 
     hoveredElementId: null,
     selectedElementId: null,

@@ -25,6 +25,12 @@
  * already in that group's local space (BuildingModel converted the raycast
  * hit there before ever calling setPendingPin), so no further transform
  * is needed here.
+ *
+ * Submitting hands off to projectStore's pinAnnotation — see that
+ * action's own comment for the full optimistic-apply-then-persist story.
+ * This component's job ends the instant that call is made: it closes the
+ * composer immediately rather than waiting on the network, since the
+ * marker appearing is what tells the user the pin registered.
  */
 "use client";
 
@@ -34,7 +40,6 @@ import { Html } from "@react-three/drei";
 import { useProjectStore, type PendingPin } from "@/store/projectStore";
 import { Label } from "@/components/ui/Label";
 import { Button } from "@/components/ui/Button";
-import type { Annotation } from "@/types/project";
 
 interface AnnotationComposerProps {
   pendingPin: PendingPin;
@@ -56,18 +61,16 @@ export function AnnotationComposer({ pendingPin }: AnnotationComposerProps) {
     const state = useProjectStore.getState();
     const element = pendingPin.meshName ? state.getElementByMeshId(pendingPin.meshName) : undefined;
 
-    const annotation: Annotation = {
-      id: `an-${crypto.randomUUID()}`,
+    // Fire-and-forget from this component's point of view — pinAnnotation
+    // never rejects (it catches its own failures to drive the rollback +
+    // retry toast), so there's nothing here to await or handle.
+    void state.pinAnnotation({
       elementId: element?.id ?? null,
       position: pendingPin.position,
       normal: pendingPin.normal,
       author: author.trim(),
       body: body.trim(),
-      createdAt: new Date().toISOString(),
-      status: "Open",
-      replies: [],
-    };
-    state.addAnnotation(annotation);
+    });
     state.exitPinMode();
   };
 
