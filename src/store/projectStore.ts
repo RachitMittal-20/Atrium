@@ -74,14 +74,22 @@
  * quietly refreshes the row in place instead of appending a duplicate or
  * firing the arrival toast/pulse a second time. Only a genuinely new id
  * (someone else's pin) takes the "append + announce" branch.
+ *
+ * getElementRevisions reads src/data/project.ts's ELEMENT_REVISIONS —
+ * seeded, static field-change history for a handful of elements, not live
+ * data threaded through hydrate() like everything else above. There's no
+ * write path (no UI edits an Element's status/spec fields today), so
+ * there's nothing to hydrate from a live backend yet; see that constant's
+ * own comment for why. ElementPanel.tsx's History affordance is the one
+ * reader.
  */
 import { create } from "zustand";
 import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { createAnnotation } from "@/lib/queries";
 import type { ConnectionStatus, Reviewer } from "@/lib/realtime";
-import { ELEMENTS, ANNOTATIONS, PROJECT } from "@/data/project";
-import type { Annotation, AnnotationReply, Element, Project, Vec3 } from "@/types/project";
+import { ELEMENTS, ANNOTATIONS, ELEMENT_REVISIONS, PROJECT } from "@/data/project";
+import type { Annotation, AnnotationReply, Element, ElementRevisionEntry, Project, Vec3 } from "@/types/project";
 
 interface ViewportBridge {
   controls: OrbitControlsImpl | null;
@@ -210,6 +218,10 @@ interface ProjectState {
   getElementByMeshId: (meshId: string) => Element | undefined;
   /** Every Annotation pinned to a given Element, in no particular order. */
   getAnnotationsForElement: (elementId: string) => Annotation[];
+  /** A given Element's seeded field-change history, newest first — keyed
+   *  by meshName, not id (see ElementRevisionEntry's own comment for why).
+   *  Empty for every element except the handful seeded with one. */
+  getElementRevisions: (meshName: string) => ElementRevisionEntry[];
 
   // --- Viewport bridge (see file header) ---
   registerViewport: (viewport: Partial<ViewportBridge>) => void;
@@ -377,6 +389,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     getElementByMeshId: (meshId) => get().elements.find((element) => element.meshName === meshId),
     getAnnotationsForElement: (elementId) =>
       get().annotations.filter((annotation) => annotation.elementId === elementId),
+    getElementRevisions: (meshName) =>
+      ELEMENT_REVISIONS.filter((revision) => revision.meshName === meshName).sort((a, b) =>
+        b.changedAt.localeCompare(a.changedAt),
+      ),
 
     registerViewport: (partial) => Object.assign(viewport, partial),
     getViewport: () => viewport,

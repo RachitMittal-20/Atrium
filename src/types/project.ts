@@ -92,3 +92,33 @@ export interface Revision {
   summary: string;
   changedElementIds: string[];
 }
+
+/**
+ * One field-level change to a single Element — what changed, old vs new
+ * value, when, and who made it. Distinct from Revision above: Revision is
+ * a project-wide issued set (R01/R02/R03, a handful a year); this is the
+ * finer-grained "why does this one line item look different now" trail
+ * ElementPanel.tsx's History affordance reads, filtered to one element at
+ * a time via projectStore's getElementRevisions. See src/data/project.ts's
+ * ELEMENT_REVISIONS for why this is seeded static data rather than
+ * derived from a live change-detection pipeline.
+ */
+export interface ElementRevisionEntry {
+  id: string;
+  /** Matches Element.meshName, not .id — meshName is the one identifier
+   *  guaranteed to line up between this seeded demo data and a real,
+   *  independently-seeded Supabase project: it's the 3D model's own mesh
+   *  name, baked into the GLB and reused verbatim as elements.mesh_name
+   *  (see src/lib/queries.ts's mapElement). Element.id isn't reliable for
+   *  this join — locally it's a fixed "el-*" string, but a live database
+   *  assigns its own uuid, which this static seed can't predict. */
+  meshName: string;
+  /** The changed field's display name — either "Status" or a key from
+   *  Element.specification, exactly as it reads in the spec sheet. */
+  field: string;
+  oldValue: string;
+  newValue: string;
+  /** ISO date string. */
+  changedAt: string;
+  author: string;
+}

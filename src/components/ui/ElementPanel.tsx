@@ -23,6 +23,14 @@
  * enterPinMode), the same as pressing "C" — see ModeIndicator.tsx and
  * BuildingModel.tsx for the rest of that flow.
  *
+ * History is a collapsed-by-default affordance (plain local useState,
+ * reset for free on every element switch since this component fully
+ * remounts per element — AnimatePresence keys it by element.id) listing
+ * projectStore's getElementRevisions for the selected element, newest
+ * first. Only rendered when that element actually has any — most don't;
+ * see src/data/project.ts's ELEMENT_REVISIONS for why this is seeded,
+ * read-only history rather than something this panel could ever write to.
+ *
  * Responsive: a right-docked sidebar above 900px (PIN_BREAKPOINT, the same
  * line the rest of the app collapses pinned scroll at), a draggable bottom
  * sheet at 70% height below it. Below that line this panel also grows a
@@ -32,7 +40,7 @@
  */
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { AnimatePresence, motion, type PanInfo } from "motion/react";
 import { useProjectStore } from "@/store/projectStore";
@@ -101,6 +109,12 @@ export function ElementPanel() {
     () => (element ? annotations.filter((annotation) => annotation.elementId === element.id) : []),
     [annotations, element],
   );
+  const getElementRevisions = useProjectStore((state) => state.getElementRevisions);
+  const revisions = useMemo(
+    () => (element ? getElementRevisions(element.meshName) : []),
+    [element, getElementRevisions],
+  );
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   useCameraFraming(element);
 
@@ -227,6 +241,42 @@ export function ElementPanel() {
               <Rule className="my-5" />
               <FieldRow label="Responsible party" value={element.responsibleParty} />
               <FieldRow label="Last updated" value={relativeTime(element.lastUpdated)} />
+
+              {revisions.length > 0 && (
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setHistoryOpen((open) => !open)}
+                    aria-expanded={historyOpen}
+                    className="flex w-full items-center justify-between py-1 font-mono text-3xs uppercase tracking-[0.18em] text-faint transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
+                  >
+                    <span>History ({revisions.length})</span>
+                    <span aria-hidden="true">{historyOpen ? "−" : "+"}</span>
+                  </button>
+                  {historyOpen && (
+                    <ul className="mt-2 flex flex-col gap-3 border-l border-rule pl-3">
+                      {revisions.map((revision) => (
+                        <li key={revision.id} className="flex flex-col gap-1">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="font-mono text-3xs uppercase tracking-[0.18em] text-brass">
+                              {revision.field}
+                            </span>
+                            <span className="font-mono text-3xs text-faint">{relativeTime(revision.changedAt)}</span>
+                          </div>
+                          <p className="text-2xs text-muted">
+                            <span className="text-faint line-through">{revision.oldValue}</span>
+                            <span className="mx-1 text-faint" aria-hidden="true">
+                              →
+                            </span>
+                            <span className="text-ink">{revision.newValue}</span>
+                          </p>
+                          <span className="font-mono text-3xs text-faint">{revision.author}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
 
               <Rule className="my-5" label="Comments" />
               {thread.length === 0 ? (

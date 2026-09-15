@@ -21,7 +21,7 @@
  * an invented spec — a fabricated line for something a designer couldn't
  * actually know yet would read as fake faster than an honest gap would.
  */
-import type { Annotation, Element, Project, Revision } from "@/types/project";
+import type { Annotation, Element, ElementRevisionEntry, Project, Revision } from "@/types/project";
 
 export const PROJECT: Project = {
   id: "meridian-house",
@@ -695,5 +695,127 @@ export const REVISIONS: Revision[] = [
     summary:
       "Issued for Client Review. Rug and sofa fabric direction under final confirmation against daylight samples; bookshelf styling revised pending client sign-off; kitchen appliance delivery flagged as a lead-time issue against the move-in date.",
     changedElementIds: ["el-area-rug", "el-sofa", "el-bookshelf", "el-kitchen-appliances", "el-table-lamp-base"],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Element revision history
+//
+// Seeded directly rather than produced by a live change-detection
+// pipeline — there is no UI anywhere in ATRIUM that edits an Element's
+// status or spec fields (elements load read-only from Supabase/this seed
+// file), so there's nothing that could actually generate these rows today.
+// Wiring that up would mean inventing an edit flow this app doesn't have
+// and this task didn't ask for, purely to feed a "stretch feature" compare
+// view — exactly the rabbit hole the brief said was fine to route around.
+// These three elements were picked because their *current* spec/status
+// already reads like something that changed recently (bookshelf's
+// "Revised" status, kitchen-appliances' backorder note, sofa's own
+// "colourway change from R02" line) — this history is the believable
+// backstory for values already sitting in ELEMENTS above, not invented
+// on top of them.
+//
+// Entries key on meshName, not the elementId shape ANNOTATIONS above
+// uses — see ElementRevisionEntry's own comment in src/types/project.ts
+// for why: meshName is the one identifier that still matches a live
+// Supabase project's own (uuid) element ids, since it's the 3D model's
+// own mesh name rather than this seed file's "el-*" convention.
+// ---------------------------------------------------------------------------
+
+export const ELEMENT_REVISIONS: ElementRevisionEntry[] = [
+  // --- el-bookshelf: styling handed to the client to confirm, then Revised.
+  {
+    id: "erev-bookshelf-01",
+    meshName: "bookshelf",
+    field: "Status",
+    oldValue: "Approved",
+    newValue: "For Review",
+    changedAt: "2026-08-20",
+    author: "M. Almeida (Studio Almeida)",
+  },
+  {
+    id: "erev-bookshelf-02",
+    meshName: "bookshelf",
+    field: "Styling",
+    oldValue: "Styled per original concept board",
+    newValue: "Client to confirm final book/object styling on site before photography",
+    changedAt: "2026-08-25",
+    author: "M. Almeida (Studio Almeida)",
+  },
+  {
+    id: "erev-bookshelf-03",
+    meshName: "bookshelf",
+    field: "Status",
+    oldValue: "For Review",
+    newValue: "Revised",
+    changedAt: "2026-08-28",
+    author: "M. Almeida (Studio Almeida)",
+  },
+
+  // --- el-kitchen-appliances: supplier lead time slipping twice, then flagged as an issue.
+  {
+    id: "erev-kitchen-appliances-01",
+    meshName: "kitchen-appliances",
+    field: "Lead Time",
+    oldValue: "4 weeks, standard stock allocation",
+    newValue: "6 weeks, manufacturer allocation delay flagged",
+    changedAt: "2026-08-05",
+    author: "Miele UK (supply)",
+  },
+  {
+    id: "erev-kitchen-appliances-02",
+    meshName: "kitchen-appliances",
+    field: "Status",
+    oldValue: "Approved",
+    newValue: "For Review",
+    changedAt: "2026-08-05",
+    author: "M. Almeida (Studio Almeida)",
+  },
+  {
+    id: "erev-kitchen-appliances-03",
+    meshName: "kitchen-appliances",
+    field: "Lead Time",
+    oldValue: "6 weeks, manufacturer allocation delay flagged",
+    newValue: "6–8 weeks, manufacturer backorder as of last supplier check",
+    changedAt: "2026-08-28",
+    author: "Miele UK (supply)",
+  },
+  {
+    id: "erev-kitchen-appliances-04",
+    meshName: "kitchen-appliances",
+    field: "Status",
+    oldValue: "For Review",
+    newValue: "Issue",
+    changedAt: "2026-08-28",
+    author: "M. Almeida (Studio Almeida)",
+  },
+
+  // --- el-sofa: client-driven colourway change and the reupholstery it triggers.
+  {
+    id: "erev-sofa-01",
+    meshName: "sofa",
+    field: "Upholstery",
+    oldValue: 'Kvadrat "Hallingdal 65" wool fabric, colourway 0143 (Ivory)',
+    newValue: 'Kvadrat "Hallingdal 65" wool fabric, colourway 0227',
+    changedAt: "2026-09-05",
+    author: "R. Voss (Client)",
+  },
+  {
+    id: "erev-sofa-02",
+    meshName: "sofa",
+    field: "Status",
+    oldValue: "Approved",
+    newValue: "For Review",
+    changedAt: "2026-09-05",
+    author: "M. Almeida (Studio Almeida)",
+  },
+  {
+    id: "erev-sofa-03",
+    meshName: "sofa",
+    field: "Lead Time",
+    oldValue: "3 weeks (stock fabric)",
+    newValue: "8–10 weeks (reupholstery, colourway change from R02)",
+    changedAt: "2026-09-08",
+    author: "Selvedge & Thread Upholstery",
   },
 ];
