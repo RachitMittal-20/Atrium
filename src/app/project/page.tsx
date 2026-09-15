@@ -7,8 +7,10 @@
  * label float over the top-left corner, matching the Hero's chrome, over
  * the graphite ground showing through wherever the model doesn't.
  * ModeIndicator mirrors it top-right with the Review/Pin badge,
- * PresenceIndicator stacks directly below it with the same alignment, and
- * CameraModeToggle (the ORBIT/WALKTHROUGH switch) stacks below that.
+ * PresenceIndicator stacks directly below it with the same alignment,
+ * CameraModeToggle (the ORBIT/WALKTHROUGH switch) stacks below that, and
+ * ControlsHelp (a dismissible "?" reference for the camera bindings each
+ * mode actually uses) stacks below that.
  *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark
@@ -38,6 +40,7 @@ import { ElementPanel } from "@/components/ui/ElementPanel";
 import { ModeIndicator } from "@/components/ui/ModeIndicator";
 import { PresenceIndicator } from "@/components/ui/PresenceIndicator";
 import { CameraModeToggle } from "@/components/ui/CameraModeToggle";
+import { ControlsHelp } from "@/components/ui/ControlsHelp";
 import { ReviewList } from "@/components/ui/ReviewList";
 import { DemoDataBadge } from "@/components/ui/DemoDataBadge";
 import { Toast } from "@/components/ui/Toast";
@@ -94,6 +97,7 @@ export default async function ProjectPage() {
         <ModeIndicator />
         <PresenceIndicator />
         <CameraModeToggle />
+        <ControlsHelp />
         <ReviewList />
         <ElementPanel />
         <DemoDataBadge />
