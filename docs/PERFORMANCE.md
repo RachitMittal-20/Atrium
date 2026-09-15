@@ -48,6 +48,21 @@ comment, realtime delivery into a walkthrough-mode window) after landing.
   production build, not dev), performance + best-practices categories,
   default simulated-throttling profile (the standard Lighthouse mobile
   preset: ~1.6 Mbps down, 150ms RTT, 4× CPU slowdown).
+- **GPU/renderer status**: `chrome://gpu` isn't reachable from Playwright
+  (`page.goto` refuses `chrome://` URLs), so renderer identity was
+  checked directly via `WEBGL_debug_renderer_info`
+  (`gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)`) on a throwaway canvas
+  — this is what caught the SwiftShader (CPU software rendering)
+  limitation noted throughout the render-cost findings below, rather
+  than that being assumed from slow numbers alone.
+- **Spurious-firing confirmation** (finding #11): rather than reasoning
+  about `PerformanceMonitor`'s sampling algorithm in the abstract,
+  temporarily instrumented its `onDecline`/`onIncline` callbacks with
+  `console.log` (same "temporary, reverted before landing" discipline as
+  the re-render instrumentation above), reproduced the exact reported
+  interaction pattern, and read the actual fired events and their fps
+  readings straight from the console — direct observation, not inference
+  from symptoms.
 
 ## Findings
 
@@ -63,6 +78,7 @@ comment, realtime delivery into a walkthrough-mode window) after landing.
 | 8 | Studio HDRI (`brown_photostudio_02_4k.exr`) was a **19.2MB** uncompressed EXR, fetched by both `/` and `/project`, for image-based lighting only (`background={false}`) | Was by far the single largest asset on either page — larger than the GLB, the JS bundle, and every other asset combined | **Fixed** — swapped for Poly Haven's own 2K export of the same source HDRI: 19.2MB → 4.9MB (−74.4%) |
 | 9 | Draco decoder loaded from a third-party CDN (`gstatic.com`) rather than self-hosted | External dependency; minor extra DNS/TLS round trip on first load | Documented, not fixed (low priority, small effect) |
 | 10 | `HDRI_PANORAMA_PATH` (`art_studio_4k.jpg`, 6MB) defined in `src/lib/assets.ts` but never imported anywhere | Dead reference, not a load-time cost (unrequested files in `public/` cost nothing) | Documented (housekeeping, not performance) |
+| 11 | `<PerformanceMonitor>`'s fps sampling (frames-per-fixed-window) is structurally incompatible with `frameloop="demand"` — a healthy idle app renders zero frames, which it reads as a severe framerate drop, spuriously firing `onDecline` → `setDpr(1)`, a React state change that resizes the WebGL drawing buffer | Confirmed firing during sustained fast-orbit-drag sessions (directly observed via instrumentation); at least one real stall (537ms) directly correlated with a firing | **Fixed** — removed the PerformanceMonitor-driven dpr adjustment entirely; dpr is now a fixed `[1, 2]` |
 
 ## Detail
 
@@ -281,6 +297,90 @@ to the new filename (`/hdri/:path*` is a glob, not a hardcoded name).
   is never fetched), flagged here for housekeeping rather than as a
   performance issue.
 
+### 11. `PerformanceMonitor` fighting `frameloop="demand"` — fixed
+
+Found investigating a reported "orbit feels not smooth" bug on the live
+site, specifically correlated with fast flick-drags rather than slow
+deliberate ones. `Scene.tsx` mounted drei's `<PerformanceMonitor>` with
+`onDecline`/`onIncline` handlers that call `setDpr(1)` /
+`setDpr([1, 2])` — a common, reasonable-looking pattern, copied from
+drei's own docs, which assume `frameloop="always"` (the r3f default).
+
+`PerformanceMonitor` estimates fps by counting how many times its own
+`useFrame` callback fires within a rolling 250ms window. Under
+`frameloop="always"`, `useFrame` fires every animation frame regardless
+of whether anything changed, so that count is a genuine fps reading.
+Under `frameloop="demand"` (this app's setting, deliberately, for the
+idle-cost reasons in this file's own findings #4 and the Scene.tsx file
+header), `useFrame` only fires on frames something actually invalidated
+— meaning a perfectly healthy, idle demand-mode app renders *zero*
+frames and produces an artificially near-zero "fps" reading.
+`PerformanceMonitor` has no way to tell "genuinely struggling" apart from
+"correctly idle," and reads the latter as the former.
+
+Confirmed this fires in practice, not just in theory: temporarily
+instrumented `onDecline`/`onIncline` with `console.log`, reproduced a
+sustained fast-orbit-drag session (8 flicks over ~13s, matching the
+reported repro), and captured:
+
+```
+[perf-debug] onDecline fired, fps= 7 refreshrate= 9   (+4617ms into the session)
+[perf-debug] onDecline fired, fps= 6 refreshrate= 9   (+10915ms into the session)
+```
+
+— two spurious `setDpr(1)` calls, each a React state change that resizes
+the WebGL drawing buffer. In the same session, drawElements/drawArrays
+timestamp logging (this document's own render-cost methodology) caught a
+537ms stall about a second after the second firing — consistent with,
+though not microsecond-exact proof of, that resize being the cause,
+given React scheduling and the resize itself both take real time.
+
+**What didn't turn out to be the cause**, checked and ruled out first: a
+separate instrumented test drove real mouse-drag gestures (pointerdown,
+one large-delta pointermove, pointerup — approximating browser event
+coalescing during a fast physical flick) and measured actual rendered
+frames before and after release. OrbitControls' damping-decay tail
+*does* keep rendering correctly under `frameloop="demand"` after a fast
+flick — 11 tail frames measured for a fast/extreme flick vs. 7 for a
+slow drag (proportionally more, matching real inertial-decay physics,
+not less). `scope.update()` is called synchronously inside
+three-stdlib's own pointer-move handlers (confirmed by reading the
+source), so every pointer event does invalidate immediately — the
+originally-hypothesized "only invalidates once per input event" failure
+mode isn't what's happening here.
+
+**Fixed** by removing the `<PerformanceMonitor>`-driven dpr adjustment
+entirely — `dpr` is now a fixed `[1, 2]` (matching what the range was
+already defaulting to before any decline/incline ever fired), and the
+now-unused `PerformanceMonitor` import, `dpr`/`setDpr` state, and handler
+JSX are gone. This is a purely subtractive change: nothing else in the
+app reads `state.performance` or depends on `PerformanceMonitor` being
+mounted, so removing it carries no regression risk by construction —
+confirmed via `tsc`/`eslint` and a full functional re-check (orbit,
+walkthrough, realtime, annotation pinning all still verified working).
+
+**Honest caveat on before/after render-timing numbers**: this Playwright
+environment's Chromium renders via SwiftShader (a CPU software
+rasterizer — confirmed via `WEBGL_debug_renderer_info`, see the
+`chrome://gpu`-equivalent check below), not real GPU hardware, which caps
+frame throughput at a few frames per second regardless of app code and
+adds its own timing jitter. A crude "any gap over 400ms across a 13s
+session" metric was too blunt to use as a clean before/after signal — it
+flagged legitimate idle gaps between scripted test actions as "stalls"
+just as often as real ones, in both the before and after code. A more
+precise per-flick test (measuring only the 700ms window immediately
+following each flick, when the render loop should clearly still be
+busy) showed a modest improvement (worst-case internal gap 362ms before
+→ 270ms after, across 18 flicks) rather than a dramatic one, and repeat
+runs of the cruder whole-session metric after the fix were mostly but
+not uniformly clean (0, 0, 0, and 1 stall across four runs, vs. the
+original run's 1 confirmed, causally-linked stall). The `onDecline`
+firing and its causal link to a real stall are solid, directly-observed
+facts, not guessed — but this sandbox cannot produce a true
+GPU-accelerated measurement to confirm how much of the originally
+reported jank this specific fix accounts for on real hardware. Whoever
+reported the original bug should re-test the deployed fix directly.
+
 ## Lighthouse
 
 Run against a real production build (`next start`), default
@@ -344,6 +444,9 @@ runs.
   Haven download, MD5-verified, kept alongside the existing 4K one for
   the record.
 - `docs/ASSETS.md` — updated to reflect the 2K source.
+- `src/components/three/Scene.tsx` (second pass, finding #11) — removed
+  `<PerformanceMonitor>`'s `onDecline`/`onIncline` → `setDpr` wiring
+  entirely; `dpr` is now a fixed `[1, 2]` prop, no more `useState` for it.
 
 No changes to `src/lib/realtime.ts`, `src/components/RealtimeProvider.tsx`,
 `src/components/three/AnnotationMarker.tsx`, `src/components/three/

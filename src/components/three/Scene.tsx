@@ -5,9 +5,20 @@
  * orbitable. Tuned for quality and performance together rather than
  * trading one for the other:
  *
- *  - dpr is a range ([1, 2]), not a fixed 2x — PerformanceMonitor pulls it
- *    down to a flat 1 when frame rate drops and lets it back up to the
- *    range once things recover.
+ *  - dpr is a fixed range ([1, 2]) — device pixel ratio, clamped to at
+ *    most 2x, never dynamically adjusted. It used to be: drei's
+ *    PerformanceMonitor sampled useFrame-tick density over a rolling
+ *    250ms window and pulled dpr down to a flat 1 on "decline." That
+ *    metric assumes continuous rendering (frameloop="always"), where a
+ *    healthy app renders every tick regardless of whether anything
+ *    changed — under frameloop="demand" a healthy app renders *nothing*
+ *    while idle, which PerformanceMonitor's tick-counting read as a
+ *    severe framerate drop and "corrected" by forcing dpr down, itself a
+ *    React state change that resizes the WebGL drawing buffer — a real,
+ *    reproduced stall (~537ms in one measured run) landing specifically
+ *    during bursts of orbit-drag activity, exactly the "smooth on slow
+ *    drags, stutters on fast flicks" symptom reported and investigated in
+ *    this pass. See docs/PERFORMANCE.md for the measured before/after.
  *  - frameloop="demand": nothing renders unless something actually
  *    changed. React-driven prop changes (hover, selection) and drei's
  *    OrbitControls already call invalidate() on their own when they touch
@@ -65,7 +76,6 @@ import {
   ContactShadows,
   Environment,
   OrbitControls,
-  PerformanceMonitor,
 } from "@react-three/drei";
 import { BuildingModel } from "@/components/three/BuildingModel";
 import { WalkthroughControls } from "@/components/three/WalkthroughControls";
@@ -212,12 +222,10 @@ function Model() {
 }
 
 export function Scene({ className }: SceneProps) {
-  const [dpr, setDpr] = useState<[number, number] | number>([1, 2]);
-
   return (
     <Canvas
       className={className}
-      dpr={dpr}
+      dpr={[1, 2]}
       frameloop="demand"
       gl={{ antialias: true, alpha: false }}
       onCreated={(state) => {
@@ -230,10 +238,6 @@ export function Scene({ className }: SceneProps) {
       // background," the deselect gesture.
       onPointerMissed={() => useProjectStore.getState().clearSelected()}
     >
-      <PerformanceMonitor
-        onDecline={() => setDpr(1)}
-        onIncline={() => setDpr([1, 2])}
-      />
       <InvalidateOnScroll />
 
       {/* Lights the HDRI beneath, not the star of the shot: low intensity
