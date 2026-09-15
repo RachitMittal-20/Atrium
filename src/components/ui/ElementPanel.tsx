@@ -43,6 +43,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { AnimatePresence, motion, type PanInfo } from "motion/react";
+import { useShallow } from "zustand/react/shallow";
 import { useProjectStore } from "@/store/projectStore";
 import { DURATION, PIN_BREAKPOINT, easeCameraTo } from "@/lib/motion";
 import { relativeTime } from "@/lib/format";
@@ -98,16 +99,24 @@ function useCameraFraming(element: Element | null) {
 export function ElementPanel() {
   const selectedElementId = useProjectStore((state) => state.selectedElementId);
   const elements = useProjectStore((state) => state.elements);
-  const annotations = useProjectStore((state) => state.annotations);
   const clearSelected = useProjectStore((state) => state.clearSelected);
 
   const element = useMemo(
     () => elements.find((candidate) => candidate.meshName === selectedElementId) ?? null,
     [elements, selectedElementId],
   );
-  const thread = useMemo(
-    () => (element ? annotations.filter((annotation) => annotation.elementId === element.id) : []),
-    [annotations, element],
+  // useShallow, not a plain selector + useMemo: subscribing to the whole
+  // `annotations` array (as this used to) re-renders this panel on *every*
+  // annotation change anywhere — including a remote realtime arrival for a
+  // completely different, unselected element — since the array gets a new
+  // reference on every store write regardless of which element it touched.
+  // Filtering *inside* the selector and comparing the result shallowly
+  // means this only actually re-renders when the annotations belonging to
+  // the currently-open element change. Measured: 3 remote inserts for an
+  // unrelated element caused 6 ElementPanel re-renders before this change,
+  // 0 after — see docs/PERFORMANCE.md.
+  const thread = useProjectStore(
+    useShallow((state) => (element ? state.annotations.filter((annotation) => annotation.elementId === element.id) : [])),
   );
   const getElementRevisions = useProjectStore((state) => state.getElementRevisions);
   const revisions = useMemo(

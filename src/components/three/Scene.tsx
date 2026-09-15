@@ -39,12 +39,20 @@
  * onto OrbitControls). OrbitControls itself is never unmounted for this —
  * only `enabled` toggles — so its target/pan state survives a round trip
  * through walkthrough mode; see WalkthroughControls.tsx's header for why
- * that matters. frameloop switches to "always" while walkthrough is
- * active: WASD needs a new frame every tick for as long as a key stays
- * held, and driving that through demand-mode's invalidate() would mean
- * calling it every single frame anyway, which is what "always" already
- * does — orbit mode's existing frameloop="demand" path (and every
- * invalidate() call that already feeds it) is untouched.
+ * that matters.
+ *
+ * frameloop stays "demand" in every camera mode, including walkthrough —
+ * it briefly switched to "always" while that mode was active, on the
+ * theory that WASD needs a new frame every tick anyway. Measured that
+ * against the alternative (see docs/PERFORMANCE.md) and it wasn't true:
+ * WalkthroughControls already calls invalidate() on every keydown, every
+ * frame it actually moves the camera, and every pointermove while
+ * dragging to look around — exactly the demand-mode self-re-invalidation
+ * pattern every other continuous interaction in this app already uses
+ * (easeCameraTo's GSAP tweens, InvalidateOnScroll below). "always" bought
+ * nothing but ~1400 draw calls/second of idle rendering the instant you
+ * switched to walkthrough and stood still — measured via a patched
+ * WebGL drawElements/drawArrays count, not guessed.
  */
 "use client";
 
@@ -205,17 +213,12 @@ function Model() {
 
 export function Scene({ className }: SceneProps) {
   const [dpr, setDpr] = useState<[number, number] | number>([1, 2]);
-  // "always" only while walkthrough is active — see this file's header.
-  // Every other mode/state keeps the existing "demand" behaviour exactly
-  // as it was.
-  const cameraMode = useProjectStore((state) => state.cameraMode);
-  const frameloop = cameraMode === "walkthrough" ? "always" : "demand";
 
   return (
     <Canvas
       className={className}
       dpr={dpr}
-      frameloop={frameloop}
+      frameloop="demand"
       gl={{ antialias: true, alpha: false }}
       onCreated={(state) => {
         state.gl.toneMapping = THREE.ACESFilmicToneMapping;

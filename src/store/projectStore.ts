@@ -86,7 +86,6 @@
 import { create } from "zustand";
 import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
-import { createAnnotation } from "@/lib/queries";
 import type { ConnectionStatus, Reviewer } from "@/lib/realtime";
 import { ELEMENTS, ANNOTATIONS, ELEMENT_REVISIONS, PROJECT } from "@/data/project";
 import type { Annotation, AnnotationReply, Element, ElementRevisionEntry, Project, Vec3 } from "@/types/project";
@@ -324,6 +323,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }
 
       try {
+        // Dynamic, not a top-level import: this module is reachable from
+        // BuildingModel.tsx, which the marketing homepage's Hero also
+        // renders (interactive={false}) — a static `import { createAnnotation }
+        // from "@/lib/queries"` up top pulled queries.ts's own import of
+        // src/lib/supabase.ts (and therefore the whole @supabase/supabase-js
+        // client, ~740KB on disk before minification) into that homepage's
+        // bundle too, even though the hero shot never calls this action.
+        // A dynamic import here means that code only ever loads into a
+        // browser that actually reaches this line — isDemoData true (the
+        // common case with no real backend) never does. See
+        // docs/PERFORMANCE.md for the measured before/after.
+        const { createAnnotation } = await import("@/lib/queries");
         const saved = await createAnnotation({
           id,
           projectId: get().project.id,
