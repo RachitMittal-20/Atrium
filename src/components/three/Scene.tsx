@@ -5,20 +5,47 @@
  * orbitable. Tuned for quality and performance together rather than
  * trading one for the other:
  *
- *  - dpr is a fixed range ([1, 2]) — device pixel ratio, clamped to at
- *    most 2x, never dynamically adjusted. It used to be: drei's
- *    PerformanceMonitor sampled useFrame-tick density over a rolling
- *    250ms window and pulled dpr down to a flat 1 on "decline." That
- *    metric assumes continuous rendering (frameloop="always"), where a
- *    healthy app renders every tick regardless of whether anything
- *    changed — under frameloop="demand" a healthy app renders *nothing*
- *    while idle, which PerformanceMonitor's tick-counting read as a
- *    severe framerate drop and "corrected" by forcing dpr down, itself a
- *    React state change that resizes the WebGL drawing buffer — a real,
- *    reproduced stall (~537ms in one measured run) landing specifically
- *    during bursts of orbit-drag activity, exactly the "smooth on slow
- *    drags, stutters on fast flicks" symptom reported and investigated in
- *    this pass. See docs/PERFORMANCE.md for the measured before/after.
+ *  - dpr is [1, 2] on ordinary hardware, capped to a flat 1 the one time
+ *    detectMaxDpr() below finds this browser is rendering via a software
+ *    (CPU) WebGL fallback — SwiftShader, llvmpipe, Microsoft's "Basic
+ *    Render Driver" — rather than a real GPU. That check runs exactly
+ *    once, synchronously, before the Canvas ever mounts (a throwaway
+ *    canvas + WEBGL_debug_renderer_info, the same renderer-identity check
+ *    docs/PERFORMANCE.md's own methodology already used from the test
+ *    side) — it is not the PerformanceMonitor-driven *dynamic* dpr
+ *    adjustment removed below, which re-evaluated every frame under an
+ *    fps metric that's meaningless under frameloop="demand" and caused a
+ *    real, measured stall. A one-time renderer-identity check at startup
+ *    has none of that mechanism's problems: it never fires mid-session,
+ *    never reacts to "demand mode is correctly idle," and only ever
+ *    lowers the ceiling for a browser that's provably not GPU-accelerated
+ *    to begin with, where a flat 1x is a straightforward, permanent
+ *    improvement rather than a guess about a struggling frame rate.
+ *  - It used to be: drei's PerformanceMonitor sampled useFrame-tick
+ *    density over a rolling 250ms window and pulled dpr down to a flat 1
+ *    on "decline." That metric assumes continuous rendering
+ *    (frameloop="always"), where a healthy app renders every tick
+ *    regardless of whether anything changed — under frameloop="demand" a
+ *    healthy app renders *nothing* while idle, which PerformanceMonitor's
+ *    tick-counting read as a severe framerate drop and "corrected" by
+ *    forcing dpr down, itself a React state change that resizes the
+ *    WebGL drawing buffer — a real, reproduced stall (~537ms in one
+ *    measured run) landing specifically during bursts of orbit-drag
+ *    activity, exactly the "smooth on slow drags, stutters on fast
+ *    flicks" symptom reported and investigated in that pass. See
+ *    docs/PERFORMANCE.md for the measured before/after.
+ *  - Zoom (mouse wheel / pinch) is driven by SmoothZoom.tsx, not
+ *    OrbitControls' own built-in wheel handling (`enableZoom={false}`
+ *    below). three-stdlib's OrbitControls damps rotation across many
+ *    frames but applies zoom in a single, undamped jump per wheel notch —
+ *    confirmed by reading its source and by measurement (a rapid-fire
+ *    wheel-notch burst produced exactly one rendered frame per notch and
+ *    total silence between them; orbit rotation's own damping tail, by
+ *    contrast, was already measured producing 7-11 settle frames after
+ *    the pointer stops). SmoothZoom.tsx re-implements the same input
+ *    handling but eases the camera's distance toward each new target over
+ *    several frames instead of snapping to it in one — see that file's
+ *    own header for the full investigation and the exact numbers.
  *  - frameloop="demand": nothing renders unless something actually
  *    changed. React-driven prop changes (hover, selection) and drei's
  *    OrbitControls already call invalidate() on their own when they touch
@@ -78,6 +105,7 @@ import {
   OrbitControls,
 } from "@react-three/drei";
 import { BuildingModel } from "@/components/three/BuildingModel";
+import { SmoothZoom } from "@/components/three/SmoothZoom";
 import { WalkthroughControls } from "@/components/three/WalkthroughControls";
 import { HDRI_STUDIO_PATH } from "@/lib/assets";
 import { useScrollStore } from "@/store/scrollStore";
@@ -86,6 +114,34 @@ import { useProjectStore } from "@/store/projectStore";
 // Matches --color-ground in src/app/globals.css — the canvas clear colour
 // has to be a real JS value, not a CSS variable, so it's restated here.
 const GROUND_COLOR = "#0A0B0C";
+
+// Known software (CPU) WebGL renderer strings — never real GPU
+// acceleration. This is the exact identity check docs/PERFORMANCE.md's
+// own methodology already established from the test side
+// (WEBGL_debug_renderer_info), reused here at runtime for real visitors
+// rather than only in this project's own Playwright tooling.
+const SOFTWARE_RENDERER_PATTERN = /swiftshader|llvmpipe|software|basic render/i;
+
+// Runs once, synchronously, before Canvas ever mounts — a throwaway
+// canvas purely to read renderer identity, discarded immediately after.
+// Returns the Canvas `dpr` upper bound: 2 on ordinary (GPU-accelerated)
+// hardware, 1 if this browser is provably rendering via a CPU fallback,
+// where doubling every pixel is pure wasted raster work. See this file's
+// own header for why this is a one-time capability check, not the
+// PerformanceMonitor-style per-frame adjustment removed from this file.
+function detectMaxDpr(): number {
+  if (typeof document === "undefined") return 2;
+  try {
+    const probe = document.createElement("canvas");
+    const gl = probe.getContext("webgl2") ?? probe.getContext("webgl");
+    if (!gl) return 2;
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = debugInfo ? String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)) : "";
+    return SOFTWARE_RENDERER_PATTERN.test(renderer) ? 1 : 2;
+  } catch {
+    return 2;
+  }
+}
 
 const KEY_LIGHT_POSITION: [number, number, number] = [4, 6, 4];
 const RIM_LIGHT_POSITION: [number, number, number] = [-5, 3, -6];
@@ -196,6 +252,11 @@ function Model() {
           enableDamping
           dampingFactor={0.08}
           enablePan={false}
+          // Zoom input (wheel + pinch) is handled entirely by SmoothZoom
+          // below instead — three-stdlib's own wheel/pinch dolly applies
+          // in one undamped jump per event, unlike the rotation damping
+          // above; see SmoothZoom.tsx's header for the measured evidence.
+          enableZoom={false}
           minPolarAngle={Math.PI / 6}
           maxPolarAngle={Math.PI / 2 - 0.05}
           // 1.5x camera.near (both measured off the same bounding sphere,
@@ -210,6 +271,10 @@ function Model() {
           // — tested down to exactly 1x near (radius * 0.01) with no
           // visible near-plane clipping in either room tried, but kept a
           // margin above that rather than shipping the literal edge case.
+          // Also confirmed no idle per-frame cost spike this close to
+          // geometry (0 idle draw calls either way; if anything, draws
+          // per settle-frame drop here vs. zoomed out, from more
+          // aggressive frustum culling) — see SmoothZoom.tsx's header.
           minDistance={extent.radius * 0.015}
           maxDistance={extent.radius * 4}
           regress
@@ -219,6 +284,17 @@ function Model() {
           ref={(instance) => {
             useProjectStore.getState().registerViewport({ controls: instance });
           }}
+        />
+      )}
+
+      {/* Damped zoom for orbit mode only — see this component's own file
+          header for why OrbitControls' built-in wheel/pinch handling is
+          disabled above in its favour. */}
+      {extent && (
+        <SmoothZoom
+          enabled={cameraMode === "orbit"}
+          minDistance={extent.radius * 0.015}
+          maxDistance={extent.radius * 4}
         />
       )}
 
@@ -234,10 +310,15 @@ function Model() {
 }
 
 export function Scene({ className }: SceneProps) {
+  // Lazy initializer: runs once on first render of this component
+  // instance, before the Canvas below ever mounts — never re-evaluated,
+  // so it can't itself become a mid-session adjustment mechanism.
+  const [maxDpr] = useState(detectMaxDpr);
+
   return (
     <Canvas
       className={className}
-      dpr={[1, 2]}
+      dpr={[1, maxDpr]}
       frameloop="demand"
       gl={{ antialias: true, alpha: false }}
       onCreated={(state) => {
