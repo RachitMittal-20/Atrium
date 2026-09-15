@@ -198,7 +198,19 @@ function Model() {
           enablePan={false}
           minPolarAngle={Math.PI / 6}
           maxPolarAngle={Math.PI / 2 - 0.05}
-          minDistance={extent.radius * 0.6}
+          // 1.5x camera.near (both measured off the same bounding sphere,
+          // so this ratio holds regardless of the model's actual scale),
+          // not the far-out radius * 0.6 this used to be — that kept the
+          // camera outside the building envelope no matter how far you
+          // dollied in, which was the whole bug this value fixes. 1.5x
+          // near (not exactly 1x) is deliberate headroom: minDistance only
+          // bounds camera-to-*target* distance, not camera-to-geometry, so
+          // a target sitting flush against a surface could still put real
+          // geometry closer to the camera than minDistance alone suggests
+          // — tested down to exactly 1x near (radius * 0.01) with no
+          // visible near-plane clipping in either room tried, but kept a
+          // margin above that rather than shipping the literal edge case.
+          minDistance={extent.radius * 0.015}
           maxDistance={extent.radius * 4}
           regress
           // Registered into projectStore the instant it exists — this is
