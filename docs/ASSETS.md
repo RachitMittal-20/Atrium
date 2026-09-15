@@ -63,9 +63,25 @@ required, but credited here anyway as good practice).
 - Source: https://polyhaven.com/a/brown_photostudio_02
 - Author: Poly Haven
 - Licence: CC0 — https://creativecommons.org/publicdomain/zero/1.0/
-- File: `public/hdri/brown_photostudio_02_4k.exr`
+- File: `public/hdri/brown_photostudio_02_2k.exr`
 - Used for: scene lighting — image-based lighting/reflections for the 3D
   scene's environment, not shown directly to the viewer.
+
+Downloaded at 2K (2048×1024), not the 4K this asset also ships in on Poly
+Haven: this file is used purely for IBL (three.js pre-filters it through
+a PMREM generator before using it for diffuse/specular lighting, so
+source resolution well above what a screen can show buys nothing), and
+the 4K export was, by a wide margin, the single largest asset either page
+of this app loaded — see `docs/PERFORMANCE.md` for the full measurement
+and a pixel-diffed visual comparison confirming no perceptible quality
+loss. Downloaded directly from Poly Haven's own CDN
+(`dl.polyhaven.org/file/ph-assets/HDRIs/exr/2k/brown_photostudio_02_2k.exr`),
+MD5-verified against Poly Haven's public API before use — same author,
+same source, same processing, just the smaller of the resolutions Poly
+Haven itself publishes. The original 4K download is kept at
+`raw-assets/brown_photostudio_02_4k.exr` alongside the 2K one
+(`raw-assets/brown_photostudio_02_2k.exr`) for the record; only the 2K
+file is deployed under `public/`.
 
 **"Art Studio"**
 

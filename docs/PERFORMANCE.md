@@ -60,7 +60,7 @@ comment, realtime delivery into a walkthrough-mode window) after landing.
 | 5 | `ElementPanel` re-rendered on every annotation change anywhere, including remote arrivals for unrelated elements | 6 wasted re-renders measured for 3 unrelated remote inserts | **Fixed** |
 | 6 | `@supabase/supabase-js` reachable from the marketing homepage's bundle via `BuildingModel.tsx`'s static import chain | −244KB raw / −62KB gzip off every homepage visitor's JS, even though the homepage never touches Supabase | **Fixed** |
 | 7 | `public/models`/`public/hdri` served with `Cache-Control: max-age=0` (revalidate every load) vs Next's own hashed chunks getting a 1-year immutable cache | Every repeat page load re-validates a 1.3MB+19.2MB asset pair | **Fixed** |
-| 8 | Studio HDRI (`brown_photostudio_02_4k.exr`) is a **19.2MB** uncompressed EXR, fetched by both `/` and `/project`, for image-based lighting only (`background={false}`) | By far the single largest asset on either page — larger than the GLB, the JS bundle, and every other asset combined | **Documented, not fixed** — no EXR-capable tooling available in this environment to safely re-encode without a visual regression risk |
+| 8 | Studio HDRI (`brown_photostudio_02_4k.exr`) was a **19.2MB** uncompressed EXR, fetched by both `/` and `/project`, for image-based lighting only (`background={false}`) | Was by far the single largest asset on either page — larger than the GLB, the JS bundle, and every other asset combined | **Fixed** — swapped for Poly Haven's own 2K export of the same source HDRI: 19.2MB → 4.9MB (−74.4%) |
 | 9 | Draco decoder loaded from a third-party CDN (`gstatic.com`) rather than self-hosted | External dependency; minor extra DNS/TLS round trip on first load | Documented, not fixed (low priority, small effect) |
 | 10 | `HDRI_PANORAMA_PATH` (`art_studio_4k.jpg`, 6MB) defined in `src/lib/assets.ts` but never imported anywhere | Dead reference, not a load-time cost (unrequested files in `public/` cost nothing) | Documented (housekeeping, not performance) |
 
@@ -196,11 +196,11 @@ a stale asset for months if the model or HDRI is ever re-exported before
 final submission. Confirmed via `curl -D -` against a `next start`
 server: both asset types now return `max-age=86400`.
 
-### 8. The 19.2MB HDRI — documented, not fixed
+### 8. The 19.2MB HDRI — fixed
 
-The single largest finding of this pass, by a wide margin. Playwright's
-real (non-simulated) network capture against a genuine headless Chromium
-load of `/` shows:
+The single largest finding of this pass, by a wide margin, when this
+document was first written. Playwright's real (non-simulated) network
+capture against a genuine headless Chromium load of `/` showed:
 
 ```
 GET /hdri/brown_photostudio_02_4k.exr → 200, Content-Length: 20159867
@@ -212,9 +212,9 @@ GET /hdri/brown_photostudio_02_4k.exr → 200, Content-Length: 20159867
 in Lighthouse's own `network-requests` audit output for `/` at all (its
 simulated-throttle trace window apparently completed before that request
 resolved), which is exactly why this pass cross-checked with a real
-browser rather than trusting one tool's capture — Lighthouse's LCP/TTI
-numbers below are consistent with this file dominating load time, even
-though Lighthouse couldn't attribute it directly.
+browser rather than trusting one tool's capture — the LCP/TTI numbers
+below are consistent with this file dominating load time, even though
+Lighthouse couldn't attribute it directly.
 
 It's used purely for image-based lighting (`<Environment files={...}
 background={false} />` in both `Scene.tsx` and `HeroScene.tsx` — never
@@ -224,26 +224,52 @@ using it for diffuse/specular IBL regardless of source resolution. A full
 4K, effectively-uncompressed EXR provides no visible benefit over a much
 smaller source for this use case.
 
-**Not fixed** because re-encoding an HDR image correctly (resizing,
-picking an appropriate compressed HDR format, and confirming the result
-still lights the model correctly) needs image-processing tooling this
-environment doesn't have (`convert`/`magick`/`oiiotool`/`exrtools` and
-Python's `OpenEXR` module were all checked and are all unavailable), and
-getting a lossy re-encode of the app's core lighting asset wrong, with no
-way to visually verify the result, is exactly the kind of risk this pass
-was told to route around rather than take blind this close to the
-deadline.
+Originally left documented rather than fixed, because re-encoding an HDR
+image correctly needs tooling this environment didn't have (`convert`/
+`magick`/`oiiotool`/`exrtools`/Python's `OpenEXR` were all checked and
+unavailable). Resolved without that tooling by going back to the exact
+same source instead of re-encoding blind: **Poly Haven publishes the same
+"Brown Photostudio 02" HDRI at multiple native resolutions already
+processed by the original author**, so the fix is a swap, not a re-encode
+— same source, same processing, just the 2K export instead of the 4K
+one, downloaded directly from
+`https://dl.polyhaven.org/file/ph-assets/HDRIs/exr/2k/brown_photostudio_02_2k.exr`
+and its MD5 checksum verified against Poly Haven's own API
+(`9c5514879eb48ead00b1bcf0cf0549f6`, matched exactly) before use.
 
-**Suggested fix** (for whoever has the right tooling, or Blender/an
-online HDR converter locally): resize to 1K or 2K equirectangular and
-re-export as `.hdr` (Radiance RGBE, roughly 3–6× smaller than an
-equivalent EXR) or a compressed KTX2/Basis HDR variant if the drei/three
-version in use supports it; spot-check the model's lit appearance before
-and after at the actual render resolution this app uses. Even a
-conservative 2K `.hdr` re-export would likely land this asset under 2MB —
-a ~90% reduction — without a visible quality loss for IBL-only usage.
-The caching fix in #7 is a real, if partial, mitigation in the meantime:
-a repeat visit within 24 hours no longer re-fetches this file at all.
+| | Size |
+|---|---|
+| Before (4K EXR) | 20,159,867 B (19.2MB) |
+| After (2K EXR) | 5,161,529 B (4.9MB) |
+| **Reduction** | **−14,998,338 B (−74.4%)** |
+
+(The performance doc's original estimate here was "~90%," based on a
+hypothetical 1–2K `.hdr` re-encode rather than Poly Haven's own 2K EXR
+export specifically — the real, measured number for the fix actually
+shipped is 74.4%, reported here as measured rather than adjusted to match
+the earlier guess.)
+
+**Visually verified**, not assumed: took matched before/after screenshots
+of the homepage at an identical scroll position (both after the same
+6-second settle past the Hero's entrance animation) and diffed them
+pixel-by-pixel. The two screenshots differ (mean abs diff 4.2/255 across
+the full frame), but that difference is concentrated in the headline
+text, which shifts by a pixel or two between two independent page loads
+due to GSAP animation/network timing variance — not the 3D content. Diffed
+the pure model viewport strip alone (excluding the text rows): **mean
+absolute pixel difference of 0.26/255 (~0.1%)**, with a max single-pixel
+difference of 30/255 (one anti-aliased edge) — visually indistinguishable,
+exactly as expected for a lighting-only asset that's pre-filtered through
+a PMREM regardless of source resolution.
+
+**What changed**: downloaded to `raw-assets/brown_photostudio_02_2k.exr`
+(the 4K original stays in `raw-assets/` too, kept for reference exactly
+like the model's own raw original); deployed copy at
+`public/hdri/brown_photostudio_02_2k.exr` (the old 4K deployed copy was
+removed — nothing referenced it anymore); `src/lib/assets.ts`'s
+`HDRI_STUDIO_PATH` now points at the 2K file. `docs/ASSETS.md` updated to
+reflect the 2K source. The caching fix in #7 still applies automatically
+to the new filename (`/hdri/:path*` is a glob, not a hardcoded name).
 
 ### 9–10. Minor / housekeeping
 
@@ -258,29 +284,43 @@ a repeat visit within 24 hours no longer re-fetches this file at all.
 ## Lighthouse
 
 Run against a real production build (`next start`), default
-simulated-throttling profile, `/` (the homepage — the heavier of the two
-routes to load cold, given finding #8):
+simulated-throttling profile, `/` (the homepage), both before and after
+the HDRI fix (finding #8):
 
-| Metric | Value |
-|---|---|
-| Performance score | 70 / 100 |
-| Best Practices score | 100 / 100 |
-| First Contentful Paint | 0.8s |
-| Largest Contentful Paint | 11.2s |
-| Total Blocking Time | 150ms |
-| Cumulative Layout Shift | 0.002 |
-| Speed Index | 4.9s |
-| Time to Interactive | 11.2s |
+| Metric | Before (4K HDRI) | After (2K HDRI) |
+|---|---|---|
+| Performance score | 70 / 100 | 73 / 100 |
+| Best Practices score | 100 / 100 | 100 / 100 |
+| First Contentful Paint | 0.8s | 0.8s |
+| Largest Contentful Paint | 11.2s | 11.2s |
+| Total Blocking Time | 150ms | 140ms |
+| Cumulative Layout Shift | 0.002 | 0.003 |
+| Speed Index | 4.9s | **3.6s** |
+| Time to Interactive | 11.2s | 11.2s |
 
-FCP (0.8s) is unaffected by the 3D scene's own asset weight — the Hero's
-`<Suspense fallback={null}>` means the page's own text/layout paints
-immediately, matching CLS's near-zero score (nothing shifts once the 3D
-content resolves). LCP/TTI (11.2s) are consistent with — and, given
-finding #8, most likely dominated by — the 19.2MB HDRI download
-completing under Lighthouse's simulated throttled-mobile profile (~1.6
-Mbps down). This wasn't re-measured after any fix in this pass, since
-none of the fixes applied touch the one asset actually driving it; #8's
-suggested fix is the lever that would move this number.
+Speed Index improved meaningfully (4.9s → 3.6s, a real, visible
+"page feels ready sooner" win) and the Performance score ticked up, but
+LCP/TTI did **not** move — which corrects this document's own earlier
+speculation. The original write-up guessed the 19.2MB HDRI was "most
+likely" behind the 11.2s LCP/TTI figure; having now actually fixed that
+asset and re-run the exact same test, that guess doesn't hold up. Checked
+why: Lighthouse's own `largest-contentful-paint-element` audit returns no
+element at all for this page in either run, and the HDRI request itself
+never appears in Lighthouse's `network-requests` capture before or after
+(the same puzzling gap noted in the original write-up, cross-checked with
+Playwright's real-browser capture both times). Whatever is actually
+pinning LCP/TTI at 11.2s here is something Lighthouse's simulated-mobile
+trace can't attribute to a concrete resource — plausibly an artifact of
+how it handles a canvas/WebGL-painted page combined with animated
+(GSAP/SplitText) text under 4× CPU throttling, not asset weight. Leaving
+this as an open, honestly-labelled question rather than repeating a
+now-disproven guess; it isn't fixable by further asset trimming based on
+the evidence actually in hand.
+
+FCP (0.8s, unchanged) is unaffected by the 3D scene's own asset weight
+either way — the Hero's `<Suspense fallback={null}>` means the page's own
+text/layout paints immediately, matching CLS's near-zero score in both
+runs.
 
 ## What changed
 
@@ -295,6 +335,15 @@ suggested fix is the lever that would move this number.
 - `next.config.ts` — added a `headers()` rule giving `/models/*` and
   `/hdri/*` a one-day `Cache-Control` instead of the framework default of
   revalidating every request.
+- `src/lib/assets.ts` — `HDRI_STUDIO_PATH` now points at
+  `brown_photostudio_02_2k.exr` instead of the 4K file.
+- `public/hdri/brown_photostudio_02_2k.exr` added (the deployed 2K HDRI);
+  `public/hdri/brown_photostudio_02_4k.exr` removed (nothing references
+  it anymore — the original stays archived in `raw-assets/`).
+- `raw-assets/brown_photostudio_02_2k.exr` added — the untouched Poly
+  Haven download, MD5-verified, kept alongside the existing 4K one for
+  the record.
+- `docs/ASSETS.md` — updated to reflect the 2K source.
 
 No changes to `src/lib/realtime.ts`, `src/components/RealtimeProvider.tsx`,
 `src/components/three/AnnotationMarker.tsx`, `src/components/three/
