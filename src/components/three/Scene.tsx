@@ -30,6 +30,21 @@
  * `fit()` silently delegates to `reset()`, which never calls it. Confirmed
  * by testing: with onFit as the only source of that data, OrbitControls
  * never mounted at all.)
+ *
+ * Camera mode: projectStore's cameraMode ("orbit" | "walkthrough", driven
+ * by CameraModeToggle.tsx) decides which of two mutually-exclusive
+ * controls drives the camera each frame — OrbitControls (unchanged from
+ * before this existed) or WalkthroughControls (new; see its own file for
+ * why it's a fully separate component rather than a mode branch bolted
+ * onto OrbitControls). OrbitControls itself is never unmounted for this —
+ * only `enabled` toggles — so its target/pan state survives a round trip
+ * through walkthrough mode; see WalkthroughControls.tsx's header for why
+ * that matters. frameloop switches to "always" while walkthrough is
+ * active: WASD needs a new frame every tick for as long as a key stays
+ * held, and driving that through demand-mode's invalidate() would mean
+ * calling it every single frame anyway, which is what "always" already
+ * does — orbit mode's existing frameloop="demand" path (and every
+ * invalidate() call that already feeds it) is untouched.
  */
 "use client";
 
@@ -45,6 +60,7 @@ import {
   PerformanceMonitor,
 } from "@react-three/drei";
 import { BuildingModel } from "@/components/three/BuildingModel";
+import { WalkthroughControls } from "@/components/three/WalkthroughControls";
 import { HDRI_STUDIO_PATH } from "@/lib/assets";
 import { useScrollStore } from "@/store/scrollStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -76,6 +92,11 @@ function InvalidateOnScroll() {
 interface ModelExtent {
   size: THREE.Vector3;
   radius: number;
+  /** The same measured Box3 `size`/`radius` above are derived from —
+   *  handed down to WalkthroughControls.tsx to clamp horizontal movement
+   *  to a padded version of it (see that file). Nothing else reads this;
+   *  size/radius already covered every other existing use. */
+  box: THREE.Box3;
 }
 
 // Centres the model, measures it, and only then renders the things that
@@ -87,6 +108,7 @@ function Model() {
   const camera = useThree((state) => state.camera);
   const invalidate = useThree((state) => state.invalidate);
   const [extent, setExtent] = useState<ModelExtent | null>(null);
+  const cameraMode = useProjectStore((state) => state.cameraMode);
 
   // ElementPanel.tsx (outside the Canvas) eases the camera onto whatever
   // gets selected — it can only do that with a live handle on invalidate,
@@ -122,7 +144,7 @@ function Model() {
       camera.updateProjectionMatrix();
     }
 
-    setExtent({ size, radius: sphere.radius });
+    setExtent({ size, radius: sphere.radius, box: box.clone() });
     invalidate();
   }, [camera, invalidate]);
   /* eslint-enable react-hooks/immutability */
@@ -152,6 +174,7 @@ function Model() {
       {extent && (
         <OrbitControls
           makeDefault
+          enabled={cameraMode === "orbit"}
           enableDamping
           dampingFactor={0.08}
           enablePan={false}
@@ -168,18 +191,31 @@ function Model() {
           }}
         />
       )}
+
+      {/* Never mounted alongside OrbitControls — see this component's own
+          file header for why disabling (not unmounting) OrbitControls
+          during walkthrough is the load-bearing choice that makes
+          switching back to ORBIT resume from where it was, not reset. */}
+      {extent && cameraMode === "walkthrough" && (
+        <WalkthroughControls bounds={extent.box} radius={extent.radius} />
+      )}
     </>
   );
 }
 
 export function Scene({ className }: SceneProps) {
   const [dpr, setDpr] = useState<[number, number] | number>([1, 2]);
+  // "always" only while walkthrough is active — see this file's header.
+  // Every other mode/state keeps the existing "demand" behaviour exactly
+  // as it was.
+  const cameraMode = useProjectStore((state) => state.cameraMode);
+  const frameloop = cameraMode === "walkthrough" ? "always" : "demand";
 
   return (
     <Canvas
       className={className}
       dpr={dpr}
-      frameloop="demand"
+      frameloop={frameloop}
       gl={{ antialias: true, alpha: false }}
       onCreated={(state) => {
         state.gl.toneMapping = THREE.ACESFilmicToneMapping;

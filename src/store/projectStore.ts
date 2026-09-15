@@ -49,6 +49,15 @@
  * single bottom sheet (SPEC/COMMENTS tabs) rather than stacking two —
  * see ReviewList.tsx's file header for the full mobile layout rationale.
  *
+ * `cameraMode` is the ORBIT/WALKTHROUGH toggle CameraModeToggle.tsx
+ * displays and drives — orthogonal to `mode` above (review/pin is about
+ * what a click *does*; cameraMode is about how the camera itself moves),
+ * so the two combine freely: pinning a comment while walking through
+ * works exactly like pinning one while orbiting. Scene.tsx reads this to
+ * decide which controls (OrbitControls vs WalkthroughControls) are
+ * driving the camera this frame; nothing about annotations, review mode,
+ * or realtime sync reads it at all.
+ *
  * Live multi-reviewer sync (mergeRemoteAnnotation, mergeRemoteReply,
  * remoteToast, presentReviewers, connectionStatus, selfReviewerId) is
  * driven entirely by src/components/RealtimeProvider.tsx from a
@@ -81,6 +90,7 @@ interface ViewportBridge {
 
 export type ProjectMode = "review" | "pin";
 export type MobileTab = "spec" | "comments";
+export type CameraMode = "orbit" | "walkthrough";
 
 export interface PendingPin {
   position: Vec3;
@@ -190,6 +200,10 @@ interface ProjectState {
   clearRecentlyAdded: () => void;
   mobileTab: MobileTab;
   setMobileTab: (tab: MobileTab) => void;
+
+  // --- Camera mode: orbit vs walkthrough (see file header) ---
+  cameraMode: CameraMode;
+  setCameraMode: (mode: CameraMode) => void;
 
   // --- Selectors ---
   /** The Element whose meshName matches a BuildingModel mesh id, if any. */
@@ -356,6 +370,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     clearRecentlyAdded: () => set({ recentlyAddedAnnotationId: null }),
     mobileTab: "spec",
     setMobileTab: (tab) => set({ mobileTab: tab }),
+
+    cameraMode: "orbit",
+    setCameraMode: (cameraMode) => set({ cameraMode }),
 
     getElementByMeshId: (meshId) => get().elements.find((element) => element.meshName === meshId),
     getAnnotationsForElement: (elementId) =>

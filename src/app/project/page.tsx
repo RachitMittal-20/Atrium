@@ -6,8 +6,9 @@
  * Invitation. Chrome is minimal: the ATRIUM wordmark and a mono project
  * label float over the top-left corner, matching the Hero's chrome, over
  * the graphite ground showing through wherever the model doesn't.
- * ModeIndicator mirrors it top-right with the Review/Pin badge, and
- * PresenceIndicator stacks directly below it with the same alignment.
+ * ModeIndicator mirrors it top-right with the Review/Pin badge,
+ * PresenceIndicator stacks directly below it with the same alignment, and
+ * CameraModeToggle (the ORBIT/WALKTHROUGH switch) stacks below that.
  *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark
@@ -36,6 +37,7 @@ import { Label } from "@/components/ui/Label";
 import { ElementPanel } from "@/components/ui/ElementPanel";
 import { ModeIndicator } from "@/components/ui/ModeIndicator";
 import { PresenceIndicator } from "@/components/ui/PresenceIndicator";
+import { CameraModeToggle } from "@/components/ui/CameraModeToggle";
 import { ReviewList } from "@/components/ui/ReviewList";
 import { DemoDataBadge } from "@/components/ui/DemoDataBadge";
 import { Toast } from "@/components/ui/Toast";
@@ -91,6 +93,7 @@ export default async function ProjectPage() {
 
         <ModeIndicator />
         <PresenceIndicator />
+        <CameraModeToggle />
         <ReviewList />
         <ElementPanel />
         <DemoDataBadge />
