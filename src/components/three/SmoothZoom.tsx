@@ -72,9 +72,14 @@ const WHEEL_ZOOM_STEP = Math.pow(0.95, 1);
 // wheel/pinch-driven target distance, per second — an exponential ease
 // (1 - e^(-RATE * delta)), the frame-rate-independent equivalent of
 // OrbitControls' own per-frame dampingFactor consumption for rotation.
-// Tuned by feel against the already-tuned rotate dampingFactor (0.08 per
-// frame at ~60fps is roughly a time constant of ~12/s) so the two
-// interactions settle in a visually similar amount of time.
+// Originally tuned by feel to settle in roughly the same amount of time
+// rotate's own dampingFactor did at the time (0.08, a time constant of
+// ~12/s at ~60fps) — rotate's dampingFactor has since been raised to 0.5
+// (P27, for tracking responsiveness; see Scene.tsx's own comment on that
+// prop), which settles noticeably faster than this now. Left unchanged
+// here deliberately: P27 was scoped to rotation lag specifically, zoom's
+// own feel was untouched and re-verified un-regressed, not re-tuned to
+// match rotate's new pace.
 const ZOOM_DAMPING_RATE = 12;
 
 // Below this fraction of the current radius, the remaining gap is

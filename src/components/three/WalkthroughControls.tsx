@@ -125,6 +125,18 @@ const MOVE_SPEED_RATIO = 0.35;
 
 // Radians of look rotation per pixel of mouse drag — tuned by feel, not
 // derived from anything.
+//
+// Checked (P27) whether this look-around has any lag/easing worth fixing,
+// the same question that turned out to be a real bug in OrbitControls'
+// own rotation (see Scene.tsx's dampingFactor comment): it doesn't.
+// handlePointerMove below applies the full raw dx/dy to yawRef/pitchRef
+// and writes camera.quaternion synchronously, every pointermove, with no
+// intermediate delta buffer for anything to lag behind. Confirmed by
+// measurement, not just by reading the source: a fast single-flick drag
+// (mousedown, one big mousemove, mouseup) landed the camera's full yaw
+// change at the exact instant of mouseup, with zero further drift over
+// the following half-second of sampling — nothing to reduce or remove
+// here.
 const LOOK_SENSITIVITY = 0.0025;
 
 // Q/E hands-free turn rate — 90°/s, a full 360° turn in 4s. Tuned by

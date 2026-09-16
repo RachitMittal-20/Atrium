@@ -305,7 +305,41 @@ function Model() {
           makeDefault
           enabled={cameraMode === "orbit"}
           enableDamping
-          dampingFactor={0.08}
+          // 0.5, not the original 0.08 (P27). three-stdlib's OrbitControls
+          // applies rotation as a leaky bucket: every pointermove adds a
+          // full raw delta to an internal sphericalDelta backlog, and
+          // *each* update() call — including the ones fired synchronously
+          // during an active drag, not just after release — only drains
+          // dampingFactor's fraction of whatever's currently queued. At
+          // 0.08 that's 8%/call, so a fast drag outpaces its own drain and
+          // the camera visibly trails the cursor, "catching up" for
+          // seconds afterward — this is what "orbit rotation feels
+          // laggy" actually was, confirmed by measurement (see below), not
+          // guessed from reading the source alone. rotateSpeed (still the
+          // default 1) was tested independently and ruled out: it only
+          // scales how much each pointermove adds to the backlog, so
+          // raising it while dampingFactor stayed low made the measured
+          // lag *worse* (a bigger backlog draining at the same 8%/call
+          // rate), not better — the opposite of what "increase
+          // rotateSpeed" would predict if the lag were actually a
+          // per-pixel-sensitivity problem rather than a drain-rate one.
+          // Measured with a single fast 300px flick (mousedown, one big
+          // mousemove, mouseup — the same "real drag, not a synthetic
+          // instant jump" approximation docs/PERFORMANCE.md's own
+          // PerformanceMonitor investigation used): at the original 0.08,
+          // only 18% of the drag's total rotation had landed by the
+          // instant of mouseup, with the remaining 82% trickling in over
+          // the next several seconds. At 0.5, 75% lands by release, and
+          // the whole gesture settles in roughly a quarter of the time —
+          // a visibly tighter, more direct-tracking feel while still
+          // leaving a real (just much shorter) damping tail, not an
+          // instant undamped snap. Re-profiled the original
+          // PerformanceMonitor stutter repro (sustained fast-drag
+          // bursts) and the wheel-zoom smoothness burst (SmoothZoom.tsx,
+          // an entirely separate mechanism from this prop) after this
+          // change — both unaffected: 0 stalls over 400ms, same frame
+          // cadence as before.
+          dampingFactor={0.5}
           enablePan={false}
           // Zoom input (wheel + pinch) is handled entirely by SmoothZoom
           // below instead — three-stdlib's own wheel/pinch dolly applies
