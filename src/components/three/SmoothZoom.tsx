@@ -36,6 +36,24 @@
  * `spherical.radius` from whatever position this component leaves the
  * camera at each frame, the same way it already tolerates external camera
  * writes from lib/motion's easeCameraTo tweens.
+ *
+ * Standing down on an external camera move (P25): lib/motion's
+ * easeCameraTo — the GSAP tween ElementPanel/ReviewList/AnnotationMarker
+ * use to frame a clicked annotation — writes camera.position directly,
+ * same as this component does. Found by measurement that the two used to
+ * fight: this component's useFrame keeps re-asserting its own
+ * wheel/pinch-set targetRadiusRef every frame regardless of *why* the
+ * camera's distance changed, so an easeCameraTo tween that moved the
+ * camera away from targetRadiusRef got dragged straight back within
+ * about half a second (traced with instrumentation: a tween aimed at
+ * distance 14267 measured at 4388 after 300ms, already back down to the
+ * stale 1569 target by 600ms). Fixed by tracking the radius this
+ * component itself last wrote (lastWrittenRadiusRef) and comparing it to
+ * the camera's actual current radius each frame: a mismatch means
+ * something else moved the camera since our last write, so this
+ * component clears its own target and stands down for that gesture
+ * rather than fighting it — the next wheel/pinch input establishes a
+ * fresh baseline from wherever the camera actually ended up.
  */
 "use client";
 
@@ -64,6 +82,14 @@ const ZOOM_DAMPING_RATE = 12;
 // chase a value that will never visibly change.
 const SETTLE_THRESHOLD_RATIO = 0.0005;
 
+// A larger fraction than SETTLE_THRESHOLD_RATIO on purpose: this is the
+// "did something *other* than our own last write move the camera"
+// detector, not a settle check, so it needs enough margin to never
+// mistake this component's own floating-point rounding for an external
+// move (which would make it spuriously abandon a perfectly normal
+// wheel/pinch ease partway through).
+const EXTERNAL_CHANGE_TOLERANCE_RATIO = 0.01;
+
 interface SmoothZoomProps {
   enabled: boolean;
   minDistance: number;
@@ -79,6 +105,11 @@ export function SmoothZoom({ enabled, minDistance, maxDistance }: SmoothZoomProp
   // distance toward. Null means "no pending zoom input" — the frame loop
   // below is a no-op until the first wheel/pinch event sets this.
   const targetRadiusRef = useRef<number | null>(null);
+  // The radius this component's own useFrame last wrote — the baseline
+  // the "did something else move the camera" check below compares
+  // against each frame. See file header ("Standing down on an external
+  // camera move").
+  const lastWrittenRadiusRef = useRef<number | null>(null);
 
   // Re-armed to null whenever this stops being the active camera mode, so
   // re-entering orbit later always starts from wherever the camera
@@ -86,7 +117,10 @@ export function SmoothZoom({ enabled, minDistance, maxDistance }: SmoothZoomProp
   // easeCameraTo-driven selection), never a stale target left over from
   // before the mode switch.
   useEffect(() => {
-    if (!enabled) targetRadiusRef.current = null;
+    if (!enabled) {
+      targetRadiusRef.current = null;
+      lastWrittenRadiusRef.current = null;
+    }
   }, [enabled]);
 
   useEffect(() => {
@@ -170,6 +204,20 @@ export function SmoothZoom({ enabled, minDistance, maxDistance }: SmoothZoomProp
 
     const offset = camera.position.clone().sub(controlsTarget);
     const currentRadius = offset.length();
+
+    // Something other than this component's own last write moved the
+    // camera (an easeCameraTo tween framing a clicked annotation, most
+    // likely) — stand down rather than drag it back toward a now-stale
+    // wheel/pinch target. See file header.
+    if (
+      lastWrittenRadiusRef.current !== null &&
+      Math.abs(currentRadius - lastWrittenRadiusRef.current) > currentRadius * EXTERNAL_CHANGE_TOLERANCE_RATIO
+    ) {
+      targetRadiusRef.current = null;
+      lastWrittenRadiusRef.current = null;
+      return;
+    }
+
     const diff = target - currentRadius;
     if (Math.abs(diff) < currentRadius * SETTLE_THRESHOLD_RATIO) return;
 
@@ -177,6 +225,7 @@ export function SmoothZoom({ enabled, minDistance, maxDistance }: SmoothZoomProp
     const nextRadius = currentRadius + diff * ease;
     offset.setLength(nextRadius);
     camera.position.copy(controlsTarget).add(offset);
+    lastWrittenRadiusRef.current = nextRadius;
     invalidate();
   });
 

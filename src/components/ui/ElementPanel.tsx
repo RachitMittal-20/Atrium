@@ -8,15 +8,27 @@
  * in ordinary DOM, mounted once in src/app/project/page.tsx alongside
  * <Scene />.
  *
- * Two different animation systems meet here on purpose:
- *  - Motion (this file only) drives the panel's own slide in/out and the
- *    mobile drag-to-dismiss gesture — plain DOM transitions, nothing 3D.
- *  - GSAP, via lib/motion's easeCameraTo (useCameraFraming below), drives
- *    the OrbitControls target and camera position eased onto the selected
- *    element, via the viewport bridge projectStore carries across the
- *    Canvas boundary. This is the one place in the app where a DOM
- *    component reaches into the 3D scene, and it does so only through
- *    that store, never by importing anything from components/three.
+ * Selecting an element never moves the camera on its own — opening this
+ * panel is a plain "show me the spec sheet," not a "take me there," and
+ * the previous camera-framing behaviour here actively fought that: it
+ * eased onto the *selected mesh's own bounding sphere*, which is fine for
+ * a small element but not for one that spans a large footprint (a floor
+ * slab, a full-height wall, the building envelope) — for those, `radius *
+ * 3` clamped against `maxDistance` produced almost exactly the same
+ * distance as fitting the *entire model*, so clicking through elements
+ * while zoomed into an interior room would visibly yank the camera back
+ * out to a bird's-eye exterior shot on every click. Since there's no
+ * dedicated "focus on this element" control in this panel (only "Pin a
+ * comment"), the fix is to not move the camera here at all — clicking
+ * through elements/comments now keeps whatever view the user already has.
+ * lib/motion's easeCameraTo (GSAP) still exists and still runs for a more
+ * *intentional* camera move: clicking an annotation pin or a ReviewList
+ * comment row eases the camera onto that comment's exact pinned 3D point
+ * (see ReviewList.tsx and AnnotationMarker.tsx) — a small, specific
+ * target, not a whole mesh, and unaffected by this change. The Motion
+ * library (this file only, distinct from GSAP above) still drives this
+ * panel's own slide in/out and the mobile drag-to-dismiss gesture — plain
+ * DOM transitions, nothing 3D.
  *
  * The "Pin a comment" button at the bottom hands off to spatial
  * annotation: it closes this panel and arms pin mode (projectStore's
@@ -41,11 +53,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import * as THREE from "three";
 import { AnimatePresence, motion, type PanInfo } from "motion/react";
 import { useShallow } from "zustand/react/shallow";
 import { useProjectStore } from "@/store/projectStore";
-import { DURATION, PIN_BREAKPOINT, easeCameraTo } from "@/lib/motion";
+import { DURATION, PIN_BREAKPOINT } from "@/lib/motion";
 import { relativeTime } from "@/lib/format";
 import { useIsMobile } from "@/lib/responsive";
 import { Label } from "./Label";
@@ -53,7 +64,7 @@ import { Rule } from "./Rule";
 import { FieldRow } from "./FieldRow";
 import { Button } from "./Button";
 import { AnnotationRows } from "./ReviewList";
-import type { Element, ElementStatus } from "@/types/project";
+import type { ElementStatus } from "@/types/project";
 
 // State must read from shape and colour together, never colour alone — the
 // dot supplies the shape half, the mono status word next to it the rest.
@@ -63,38 +74,6 @@ const STATUS_DOT_COLOR: Record<ElementStatus, string> = {
   Issue: "bg-clay",
   Revised: "bg-muted",
 };
-
-// Eases OrbitControls' target and the camera's position onto the selected
-// element's live world bounding box, keeping the current viewing angle
-// (the direction from target to camera) rather than cutting to a fixed
-// shot. Reads the OrbitControls instance and the mesh's Object3D through
-// projectStore's viewport bridge — populated by Scene.tsx and
-// BuildingModel.tsx respectively — since this runs entirely outside the
-// Canvas.
-function useCameraFraming(element: Element | null) {
-  useEffect(() => {
-    if (!element) return;
-
-    const { controls, invalidate } = useProjectStore.getState().getViewport();
-    const object = useProjectStore.getState().getElementObject(element.meshName);
-    if (!controls || !invalidate || !object) return;
-
-    const camera = controls.object;
-    const box = new THREE.Box3().setFromObject(object);
-    if (box.isEmpty()) return;
-
-    const center = box.getCenter(new THREE.Vector3());
-    const sphere = box.getBoundingSphere(new THREE.Sphere());
-    const direction = camera.position.clone().sub(controls.target).normalize();
-    const distance = THREE.MathUtils.clamp(sphere.radius * 3, controls.minDistance, controls.maxDistance);
-    const nextPosition = center.clone().add(direction.multiplyScalar(distance));
-
-    const timeline = easeCameraTo(controls, camera, invalidate, center, nextPosition);
-    return () => {
-      timeline.kill();
-    };
-  }, [element]);
-}
 
 export function ElementPanel() {
   const selectedElementId = useProjectStore((state) => state.selectedElementId);
@@ -124,8 +103,6 @@ export function ElementPanel() {
     [element, getElementRevisions],
   );
   const [historyOpen, setHistoryOpen] = useState(false);
-
-  useCameraFraming(element);
 
   const isMobile = useIsMobile(PIN_BREAKPOINT);
   const mobileTab = useProjectStore((state) => state.mobileTab);
