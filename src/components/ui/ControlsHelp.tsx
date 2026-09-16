@@ -25,10 +25,13 @@
  *     unlike orbit-controls' usual three-affordance reputation
  *     (rotate/zoom/pan), only rotate and zoom are listed here; claiming a
  *     pan gesture that does nothing would be worse than not mentioning it.
- *   - Walkthrough: WalkthroughControls.tsx's own FORWARD_KEYS/BACK_KEYS/
- *     LEFT_KEYS/RIGHT_KEYS (WASD + arrow keys) and its pointerdown handler
- *     (`if (event.button !== 0) return` — left mouse button specifically)
- *     are the exact source for the two lines below.
+ *   - Walkthrough: WalkthroughControls.tsx's own FORWARD_KEYS/BACK_KEYS
+ *     (WASD only, not arrows, as of P26 — Up/Down were repurposed),
+ *     LEFT_KEYS/RIGHT_KEYS (still both A/D and the left/right arrows),
+ *     EYE_UP_KEYS/EYE_DOWN_KEYS (the repurposed Up/Down arrows),
+ *     ROTATE_LEFT_KEYS/ROTATE_RIGHT_KEYS (Q/E), and its pointerdown
+ *     handler (`if (event.button !== 0) return` — left mouse button
+ *     specifically) are the exact source for the four rows below.
  *
  * Auto-opens once per browser tab (sessionStorage, not localStorage —
  * "once per session" is exactly what sessionStorage already means, and a
@@ -128,12 +131,20 @@ export function ControlsHelp() {
               <p className="font-mono text-3xs uppercase tracking-[0.18em] text-faint">Walkthrough</p>
               <dl className="mt-1.5 space-y-1">
                 <div className="flex justify-between gap-3 text-2xs">
-                  <dt className="text-faint">WASD / arrows</dt>
+                  <dt className="text-faint">WASD</dt>
                   <dd className="text-ink">Move</dd>
                 </div>
                 <div className="flex justify-between gap-3 text-2xs">
                   <dt className="text-faint">Drag</dt>
                   <dd className="text-ink">Look around</dd>
+                </div>
+                <div className="flex justify-between gap-3 text-2xs">
+                  <dt className="text-faint">Up / Down</dt>
+                  <dd className="text-ink">Eye height</dd>
+                </div>
+                <div className="flex justify-between gap-3 text-2xs">
+                  <dt className="text-faint">Q / E</dt>
+                  <dd className="text-ink">Rotate view</dd>
                 </div>
               </dl>
             </div>

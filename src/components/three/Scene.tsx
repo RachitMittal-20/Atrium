@@ -67,7 +67,12 @@
  * it only ever fires for orthographic cameras — for a perspective camera,
  * `fit()` silently delegates to `reset()`, which never calls it. Confirmed
  * by testing: with onFit as the only source of that data, OrbitControls
- * never mounted at all.)
+ * never mounted at all.) It also derives `floorY` (the "floor" mesh's own
+ * measured Y, not the whole model's box.min.y — see ModelExtent's own
+ * comment for why those differ) and `metersPerUnit` (calibrated off the
+ * "interior-door" mesh against a real 2.032m door height), both handed
+ * down to WalkthroughControls.tsx so its eye-height and vertical-range
+ * constants can be stated in real metres instead of an arbitrary ratio.
  *
  * Camera mode: projectStore's cameraMode ("orbit" | "walkthrough", driven
  * by CameraModeToggle.tsx) decides which of two mutually-exclusive
@@ -163,6 +168,13 @@ function InvalidateOnScroll() {
   return null;
 }
 
+// Standard interior door height (80in / 2032mm — the common US residential
+// figure, and close enough to the UK/EU ~2.0-2.1m norm that this doesn't
+// need per-locale branching) — the real-world reference WalkthroughControls'
+// eye-height and vertical-range constants are calibrated against. See
+// Model()'s useLayoutEffect below for how this becomes metersPerUnit.
+const DOOR_HEIGHT_METERS = 2.032;
+
 interface ModelExtent {
   size: THREE.Vector3;
   radius: number;
@@ -171,6 +183,24 @@ interface ModelExtent {
    *  to a padded version of it (see that file). Nothing else reads this;
    *  size/radius already covered every other existing use. */
   box: THREE.Box3;
+  /** World-space Y of the walkable floor surface — measured directly off
+   *  the "floor" mesh, not derived from the whole model's bounding box.
+   *  That distinction matters: `box.min.y` is contaminated by structure
+   *  below the floor slab (the building envelope meshes both measure
+   *  min.y ≈ 3.4, a few units *below* the real floor at 66.72), so using
+   *  it as "the floor" was the root cause of WalkthroughControls' eye
+   *  height landing near ankle height instead of eye level — see that
+   *  file's header for the full measured numbers. */
+  floorY: number;
+  /** Real-world metres per model unit, calibrated off the "interior-door"
+   *  mesh's measured world-space height against DOOR_HEIGHT_METERS — the
+   *  model's units were previously undocumented as unconvertible (see
+   *  docs/DECISIONS.md's "model units are measured off the real bounding
+   *  sphere" entry); a door is a reliable, near-universal real-world
+   *  reference dimension every architectural model has exactly one clear
+   *  instance of, which is why it's the anchor rather than, say, a ceiling
+   *  height (ceilings vary by design; doors don't, much). */
+  metersPerUnit: number;
 }
 
 // Centres the model, measures it, and only then renders the things that
@@ -218,7 +248,32 @@ function Model() {
       camera.updateProjectionMatrix();
     }
 
-    setExtent({ size, radius: sphere.radius, box: box.clone() });
+    // Both read via the viewport bridge's element-object registry, the
+    // same one ElementPanel.tsx used to read from before P25 removed that
+    // call site — BuildingModel's mesh ref callbacks (registerElementObject)
+    // commit before this layout effect runs (refs attach during commit,
+    // ahead of any layout effect further up the tree), so both are
+    // reliably populated here on every fresh mount, demo data or live.
+    const doorObject = useProjectStore.getState().getElementObject("interior-door");
+    const doorBox = doorObject ? new THREE.Box3().setFromObject(doorObject) : null;
+    const doorHeight = doorBox && !doorBox.isEmpty() ? doorBox.max.y - doorBox.min.y : null;
+    // Fallback ratio (this model's own actual measured door-height-to-
+    // metersPerUnit relationship, ~1210.47 units for a 2.032m door) only
+    // matters if the door mesh is ever missing/renamed — every other path
+    // uses the real measurement above.
+    const metersPerUnit = doorHeight ? DOOR_HEIGHT_METERS / doorHeight : DOOR_HEIGHT_METERS / (sphere.radius * 0.1723);
+
+    const floorObject = useProjectStore.getState().getElementObject("floor");
+    const floorBox = floorObject ? new THREE.Box3().setFromObject(floorObject) : null;
+    // The floor mesh is a near-zero-thickness plane — min/max.y differ by
+    // a fraction of a unit — so either bound is fine; min.y is used rather
+    // than a center to stay unambiguous. Falls back to the whole model's
+    // own box.min.y only if the floor mesh can't be found at all, which
+    // is worse than the door fallback above (it's the exact value this
+    // whole fix exists to stop trusting) but strictly better than a crash.
+    const floorY = floorBox && !floorBox.isEmpty() ? floorBox.min.y : box.min.y;
+
+    setExtent({ size, radius: sphere.radius, box: box.clone(), floorY, metersPerUnit });
     invalidate();
   }, [camera, invalidate]);
   /* eslint-enable react-hooks/immutability */
@@ -303,7 +358,12 @@ function Model() {
           during walkthrough is the load-bearing choice that makes
           switching back to ORBIT resume from where it was, not reset. */}
       {extent && cameraMode === "walkthrough" && (
-        <WalkthroughControls bounds={extent.box} radius={extent.radius} />
+        <WalkthroughControls
+          bounds={extent.box}
+          radius={extent.radius}
+          floorY={extent.floorY}
+          metersPerUnit={extent.metersPerUnit}
+        />
       )}
     </>
   );
