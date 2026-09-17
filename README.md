@@ -46,20 +46,35 @@ ATRIUM replaces that with a navigable 3D model of the actual space:
 - Reviewers pin comments to the exact 3D point they're talking about, instead of describing a location in words.
 - Multiple reviewers can be in the model at once, watching each other's pins and presence arrive live.
 
+![Orbit mode — exterior view of the building](docs/images/01-orbit-exterior.jpg)
+<p align="center"><sub>Orbit mode: the building viewed from outside, annotation pins visible across every room at once.</sub></p>
+
 ## Features
 
 - **Orbit and walkthrough 3D viewing** — orbit around the model like a turntable, or drop into a first-person WASD walkthrough to move through the space at eye height. Switching modes never resets the camera: leaving walkthrough resumes orbit from exactly the view it had before. See [docs/DECISIONS.md](docs/DECISIONS.md) for why OrbitControls is disabled rather than unmounted to make that possible.
+
+  ![Walkthrough mode — standing inside the living area at eye level](docs/images/02-walkthrough-interior.jpg)
+  <sub>Walkthrough mode, inside the living area.</sub>
+
 - **Pinned, threaded annotations** — click any point on the model in Pin mode to drop a comment at that exact 3D coordinate (position + surface normal), then reply to build a thread. Comments render as markers in the scene and as a synced list in the review panel; hovering either side highlights the other.
+
+  ![An open annotation thread showing the pinned marker in the scene and the comment beside it](docs/images/03-annotation-thread.jpg)
+  <sub>A pinned marker and its comment thread, open together — the spec sheet, hover preview, and full conversation for that element.</sub>
+
 - **Contextual element panel** — clicking any interactive mesh (furniture, fixtures, finishes, structural elements) opens its specification: category, status (Approved / For Review / Revised / Issue), responsible party, and a spec sheet whose fields vary sensibly by category.
 - **Revision history** — a compare view on the element panel showing a seeded field-change history (old value → new value) for elements that have one, keyed by the model's own mesh name so it lines up whether the app is running against local demo data or a live Supabase project.
 - **Live multi-reviewer sync** — pin a comment or reply in one browser tab and it appears in every other tab open on the same project within roughly a second, via Supabase Realtime. A presence strip shows who else is currently looking at the model, and a connection-status indicator never silently claims to be live once a connection has actually dropped. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#known-issues-we-hit-and-fixed) for two real bugs found and fixed while building this.
+
+  ![Two browser windows side by side: one pinning a comment, the other receiving it live with no refresh](docs/images/04-realtime-sync.jpg)
+  <sub>Two windows, same project: pinning a comment in one (left) delivers it to the other (right) — annotation marker and "New comment" toast both — in well under a second, no refresh.</sub>
+
 - **Graceful demo-data fallback** — with no Supabase project configured (or if one is unreachable), the app runs entirely against local seed data instead of showing a blank or broken page, with a corner badge saying so.
 
 ## Demo
 
 **[Try it live →](https://atrium-ten-rho.vercel.app/)**
 
-> [Demo video/GIF here] — a short walkthrough of orbit/walkthrough camera modes, pinning a comment, and live multi-reviewer sync is planned but not yet recorded.
+Screenshots of each feature are inline above, captured directly from the live deploy. A short screen-recording (orbit → walkthrough → pin a comment → watch it sync live) is planned but not yet recorded — [Demo video/GIF here] once it exists.
 
 To see it working end to end yourself:
 
