@@ -36,6 +36,26 @@
  *    outline around the selected one — two different mechanisms so the
  *    two states are never visually ambiguous.
  *
+ * Element visibility (projectStore's hiddenElementIds, driven from
+ * VisibilityToolbar.tsx's category chips and ElementPanel.tsx's Hide
+ * button) is read here the same way hover/selection are: one store
+ * subscription, checked per mesh while mapping MESH_ENTRIES. A hidden
+ * mesh stays *mounted* — never skipped from the map — for two reasons:
+ * its ref callback has already registered its Object3D on the viewport
+ * bridge (Scene.tsx looks up "interior-door" and "floor" through it), and
+ * unmounting would null that registration out from under them; and
+ * flipping `visible` is free where remounting a mesh isn't. Instead it
+ * gets both `visible={false}` *and* a no-op `raycast`, because three.js
+ * raycasting ignores `visible` entirely — without the second half, a
+ * hidden wall would still swallow hovers and clicks meant for whatever
+ * is behind it (the whole point of hiding it), and would still occlude
+ * the Html hover label and annotation numerals, whose `occlude` check is
+ * itself a raycast against the scene. With it, a hidden mesh is simply
+ * not there as far as any pointer, click, pin, or occlusion test is
+ * concerned. (WalkthroughControls' floor raycast sees it the same way —
+ * hide the floor and it falls back to its flat floorY, as documented in
+ * that file for a ray that misses.)
+ *
  * Each material is cloned per mesh (see meshMaterials below) rather than
  * used directly from the shared `materials` dictionary useGLTF returns:
  * two meshes here (the building's lower and full-height envelope) share
@@ -50,7 +70,9 @@
  *
  * Pass `interactive={false}` (the hero's cinematic shot does) to skip all
  * of the above entirely — no cloned materials, no pointer handlers, no
- * Html label, no EffectComposer/Outline, no annotation markers/composer.
+ * Html label, no EffectComposer/Outline, no annotation markers/composer,
+ * and no visibility toggling (the hero always shows the whole model, even
+ * if something was hidden on /project earlier in the same session).
  * It's not just "interaction does nothing": r3f still raycasts every mesh
  * that has a pointer handler attached on every pointer move, so leaving
  * those handlers off altogether is what actually removes the cost, not
@@ -67,7 +89,9 @@
  * second time. Both groups still share the exact same outer transform
  * (whatever Center/Bounds in Scene.tsx apply via `props`), which is what
  * keeps the model and its markers welded together through any amount of
- * orbiting despite living in two different child groups.
+ * orbiting despite living in two different child groups. Markers are not
+ * hidden along with the element they're pinned to: a comment is about a
+ * location, and hiding a wall is often exactly how you'd get to see one.
  */
 "use client";
 
@@ -293,6 +317,15 @@ const HOVER_EMISSIVE_INTENSITY = 0.08;
 // honest and the composer from crashing on a freak input.
 const FALLBACK_NORMAL = new THREE.Vector3(0, 1, 0);
 
+// The two raycast implementations a mesh switches between as it's hidden
+// and shown (see "Element visibility" in the file header). Both are
+// passed explicitly, rather than passing `undefined` to mean "go back to
+// the default", so un-hiding never depends on how r3f happens to reset a
+// removed prop — the visible case is simply three.js's own Mesh.raycast,
+// assigned back onto the instance.
+const MESH_RAYCAST = THREE.Mesh.prototype.raycast;
+const NO_RAYCAST = () => {};
+
 // The exact rotation the inner mesh group below applies. A raycast hit's
 // event.normal comes back in the *intersected mesh's own object space* —
 // which, since every MESH_ENTRIES node has an identity local transform,
@@ -309,9 +342,9 @@ type BuildingModelProps = ThreeElements["group"] & {
   /**
    * Set false for a purely decorative shot (the hero): skips cloned
    * materials, pointer handlers, the hover label, the selection outline,
-   * and annotation markers/composer entirely, rather than just leaving
-   * them visually inert. Defaults true — the interactive /project scene's
-   * normal behaviour.
+   * annotation markers/composer, and visibility toggling entirely, rather
+   * than just leaving them visually inert. Defaults true — the
+   * interactive /project scene's normal behaviour.
    */
   interactive?: boolean;
 };
@@ -327,6 +360,10 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   const setSelected = useProjectStore((state) => state.setSelected);
   const annotations = useProjectStore((state) => state.annotations);
   const pendingPin = useProjectStore((state) => state.pendingPin);
+  // Written from the DOM side (VisibilityToolbar.tsx, ElementPanel.tsx);
+  // a new Set reference on every change, so this re-renders exactly when
+  // something is hidden or shown.
+  const hiddenElementIds = useProjectStore((state) => state.hiddenElementIds);
 
   // Every mesh gets its own material instance — material_1 is shared by
   // two meshes in the source file, and tweening a shared material's
@@ -361,13 +398,13 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   // amount of orbiting.
   const outerGroupRef = useRef<THREE.Group>(null);
 
-  // Every hover/selection change needs a fresh render under
+  // Every hover/selection/visibility change needs a fresh render under
   // frameloop="demand" — this alone covers the state change itself; the
   // hover tween's own onUpdate (below) covers the ~15 frames the tween
   // animates across, which this single call would not.
   useEffect(() => {
     invalidate();
-  }, [hoveredElementId, selectedElementId, invalidate]);
+  }, [hoveredElementId, selectedElementId, hiddenElementIds, invalidate]);
 
   useEffect(() => {
     return () => {
@@ -448,41 +485,57 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
     setSelectedObject(selectedElementId ? (objectRefs.current[selectedElementId] ?? null) : null);
   }, [selectedElementId]);
 
+  // A hidden selection keeps its ElementPanel open (so its Hide button can
+  // flip to Show — see projectStore's visibility actions) but loses its
+  // outline: there's nothing on screen left to draw it around, and with
+  // xRay on, the Outline pass would otherwise risk tracing a ghost of it.
+  const outlineObject =
+    selectedObject && selectedElementId && !hiddenElementIds.has(selectedElementId) ? selectedObject : null;
+
   return (
     <group ref={outerGroupRef} {...props} dispose={null}>
       <group ref={meshGroupRef} rotation={[-Math.PI / 2, 0, 0]}>
         {/* Decorative edge-line overlay traced over the whole model — a
             Sketchfab sketch-style outline pass, not real geometry, and not
-            interactive. */}
+            interactive. Never hidden: it's one merged line set over the
+            entire model, not per element. */}
         <lineSegments geometry={nodes.Material4.geometry} material={materials.edge_color646464255} />
         <lineSegments geometry={nodes.Material2_2.geometry} material={materials.edge_color646464255} />
 
-        {MESH_ENTRIES.map((entry) => (
-          <mesh
-            key={entry.id}
-            ref={
-              interactive
-                ? (el) => {
-                    objectRefs.current[entry.id] = el;
-                    // ElementPanel.tsx (outside the Canvas) needs this
-                    // mesh's live world bounding box to frame the camera on
-                    // selection — projectStore is the only bridge it has.
-                    useProjectStore.getState().registerElementObject(entry.id, el);
-                  }
-                : undefined
-            }
-            name={entry.label}
-            geometry={nodes[entry.geometry].geometry}
-            material={meshMaterials[entry.id]}
-            onPointerOver={interactive ? handlePointerOver(entry.id) : undefined}
-            onPointerOut={interactive ? handlePointerOut(entry.id) : undefined}
-            onClick={interactive ? handleClick(entry.id) : undefined}
-          >
-            {interactive && entry.id === hoveredElementId && (
-              <HoverLabel geometry={nodes[entry.geometry].geometry} label={entry.label} />
-            )}
-          </mesh>
-        ))}
+        {MESH_ENTRIES.map((entry) => {
+          // Only the interactive scene honours visibility — see file header.
+          const hidden = interactive && hiddenElementIds.has(entry.id);
+          return (
+            <mesh
+              key={entry.id}
+              ref={
+                interactive
+                  ? (el) => {
+                      objectRefs.current[entry.id] = el;
+                      // ElementPanel.tsx (outside the Canvas) needs this
+                      // mesh's live world bounding box to frame the camera on
+                      // selection — projectStore is the only bridge it has.
+                      useProjectStore.getState().registerElementObject(entry.id, el);
+                    }
+                  : undefined
+              }
+              name={entry.label}
+              geometry={nodes[entry.geometry].geometry}
+              material={meshMaterials[entry.id]}
+              // Hidden = not drawn *and* not hittable — see file header for
+              // why `visible` alone isn't enough.
+              visible={!hidden}
+              raycast={hidden ? NO_RAYCAST : MESH_RAYCAST}
+              onPointerOver={interactive ? handlePointerOver(entry.id) : undefined}
+              onPointerOut={interactive ? handlePointerOut(entry.id) : undefined}
+              onClick={interactive ? handleClick(entry.id) : undefined}
+            >
+              {interactive && !hidden && entry.id === hoveredElementId && (
+                <HoverLabel geometry={nodes[entry.geometry].geometry} label={entry.label} />
+              )}
+            </mesh>
+          );
+        })}
       </group>
 
       {interactive &&
@@ -491,10 +544,10 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
         ))}
       {interactive && pendingPin && <AnnotationComposer pendingPin={pendingPin} />}
 
-      {interactive && selectedObject && (
+      {interactive && outlineObject && (
         <EffectComposer autoClear={false}>
           <Outline
-            selection={[selectedObject]}
+            selection={[outlineObject]}
             visibleEdgeColor={BRASS}
             // xRay keeps the outline visible even when the selected mesh
             // is partly behind something else — but its hiddenEdgeColor

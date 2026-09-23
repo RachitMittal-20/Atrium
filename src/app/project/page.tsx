@@ -10,7 +10,9 @@
  * PresenceIndicator stacks directly below it with the same alignment,
  * CameraModeToggle (the ORBIT/WALKTHROUGH switch) stacks below that, and
  * ControlsHelp (a dismissible "?" reference for the camera bindings each
- * mode actually uses) stacks below that.
+ * mode actually uses) stacks below that. VisibilityToolbar (per-category
+ * show/hide chips + Reset) takes the otherwise-free bottom-right corner,
+ * just above DemoDataBadge — see its own header for why there.
  *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark
@@ -41,6 +43,7 @@ import { ModeIndicator } from "@/components/ui/ModeIndicator";
 import { PresenceIndicator } from "@/components/ui/PresenceIndicator";
 import { CameraModeToggle } from "@/components/ui/CameraModeToggle";
 import { ControlsHelp } from "@/components/ui/ControlsHelp";
+import { VisibilityToolbar } from "@/components/ui/VisibilityToolbar";
 import { ReviewList } from "@/components/ui/ReviewList";
 import { DemoDataBadge } from "@/components/ui/DemoDataBadge";
 import { Toast } from "@/components/ui/Toast";
@@ -98,6 +101,7 @@ export default async function ProjectPage() {
         <PresenceIndicator />
         <CameraModeToggle />
         <ControlsHelp />
+        <VisibilityToolbar />
         <ReviewList />
         <ElementPanel />
         <DemoDataBadge />

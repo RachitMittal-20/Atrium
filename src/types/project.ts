@@ -8,6 +8,13 @@
  * history that explains how the design got to where it is. Shared
  * everywhere this data is read (src/data/project.ts, projectStore, any
  * future UI) — never redeclared locally.
+ *
+ * One runtime value lives here alongside the types: ELEMENT_CATEGORIES,
+ * the list the ElementCategory union is derived from. It belongs next to
+ * that type rather than in any one component because two components need
+ * the actual list at runtime (ReviewList.tsx's category filter and
+ * VisibilityToolbar.tsx's show/hide chips), and deriving the type from it
+ * is what keeps the list and the union from ever drifting apart.
  */
 
 /** A 3D point or direction — reused for both Annotation.position and .normal. */
@@ -31,12 +38,11 @@ export interface Project {
   revision: string;
 }
 
-export type ElementCategory =
-  | "Furniture"
-  | "Fixture"
-  | "Finish"
-  | "Structural"
-  | "Lighting";
+/** Every element category, in display order — the single runtime source
+ *  ElementCategory below is derived from (see file header). */
+export const ELEMENT_CATEGORIES = ["Furniture", "Fixture", "Finish", "Structural", "Lighting"] as const;
+
+export type ElementCategory = (typeof ELEMENT_CATEGORIES)[number];
 
 export type ElementStatus = "Approved" | "For Review" | "Revised" | "Issue";
 

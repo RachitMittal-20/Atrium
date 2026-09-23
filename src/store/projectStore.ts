@@ -58,6 +58,21 @@
  * driving the camera this frame; nothing about annotations, review mode,
  * or realtime sync reads it at all.
  *
+ * `hiddenElementIds` is element visibility: the meshNames currently
+ * hidden from the 3D scene. Unlike the viewport bridge above this *is*
+ * tracked state, deliberately — hiding something has to re-render both
+ * sides of the Canvas boundary (BuildingModel.tsx flips that mesh's
+ * `visible` and disables its raycast; VisibilityToolbar.tsx and
+ * ElementPanel.tsx re-render their chips/buttons), which is exactly what
+ * set() is for. It stores what's *hidden*, not what's visible, so the
+ * empty default means "everything shown", resetVisibility() is just
+ * "empty it", and any element that only appears after hydrate() is
+ * visible without anyone having to add it. Category visibility is never
+ * stored separately — it's always derived from this one set (a category
+ * is "hidden" when every element in it is), so a category chip and a
+ * per-element hide can never disagree about the same mesh. Purely
+ * client-side for now: nothing here is persisted or synced over realtime.
+ *
  * Live multi-reviewer sync (mergeRemoteAnnotation, mergeRemoteReply,
  * remoteToast, presentReviewers, connectionStatus, selfReviewerId) is
  * driven entirely by src/components/RealtimeProvider.tsx from a
@@ -88,7 +103,15 @@ import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import type { ConnectionStatus, Reviewer } from "@/lib/realtime";
 import { ELEMENTS, ANNOTATIONS, ELEMENT_REVISIONS, PROJECT } from "@/data/project";
-import type { Annotation, AnnotationReply, Element, ElementRevisionEntry, Project, Vec3 } from "@/types/project";
+import type {
+  Annotation,
+  AnnotationReply,
+  Element,
+  ElementCategory,
+  ElementRevisionEntry,
+  Project,
+  Vec3,
+} from "@/types/project";
 
 interface ViewportBridge {
   controls: OrbitControlsImpl | null;
@@ -180,6 +203,23 @@ interface ProjectState {
    *  fresh mesh click) should always start on its spec, never stranded on
    *  whatever tab a previous, now-closed panel was left on. */
   clearSelected: () => void;
+
+  // --- Element visibility (see file header) ---
+  /** meshNames currently hidden from the scene. Always replaced with a new
+   *  Set on change, never mutated in place — zustand only notices a new
+   *  reference, so an in-place .add() would never re-render anything. */
+  hiddenElementIds: ReadonlySet<string>;
+  /** Hides one element if it's showing, shows it if it's hidden — the
+   *  Hide/Show button in ElementPanel.tsx. */
+  toggleElementVisibility: (meshName: string) => void;
+  /** If *any* element in the category is still showing, hides all of
+   *  them; only once every one is already hidden does it show them all
+   *  again. So a category with one element hidden individually still
+   *  reads as "on" (its chip in VisibilityToolbar.tsx stays lit), and one
+   *  click takes the rest of it away rather than first un-hiding the one. */
+  toggleCategoryVisibility: (category: ElementCategory) => void;
+  /** Shows everything again — VisibilityToolbar.tsx's Reset. */
+  resetVisibility: () => void;
 
   // --- Spatial annotation: pin mode ---
   mode: ProjectMode;
@@ -281,6 +321,26 @@ interface ProjectState {
   setConnectionStatus: (status: ConnectionStatus) => void;
 }
 
+/**
+ * The state patch every visibility change applies: the new hidden set,
+ * plus clearing hoveredElementId if the hovered mesh just disappeared.
+ * A hidden mesh can no longer be hit (BuildingModel.tsx disables its
+ * raycast), so r3f would never deliver the pointerout that normally
+ * clears hover — without this, the hover label could be left pointing at
+ * something that's no longer on screen. Shared by both toggle actions
+ * below; resetVisibility doesn't need it, since showing things can never
+ * strand a hover.
+ */
+function applyHidden(
+  hidden: Set<string>,
+  hoveredElementId: string | null,
+): Pick<ProjectState, "hiddenElementIds" | "hoveredElementId"> {
+  return {
+    hiddenElementIds: hidden,
+    hoveredElementId: hoveredElementId !== null && hidden.has(hoveredElementId) ? null : hoveredElementId,
+  };
+}
+
 export const useProjectStore = create<ProjectState>((set, get) => {
   const viewport: ViewportBridge = { controls: null, invalidate: null };
   const elementObjects: Record<string, THREE.Object3D | null> = {};
@@ -372,6 +432,40 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     clearHovered: () => set({ hoveredElementId: null }),
     setSelected: (id) => set({ selectedElementId: id }),
     clearSelected: () => set({ selectedElementId: null, mobileTab: "spec" }),
+
+    // Element visibility. Selection is deliberately left alone when the
+    // selected element is hidden: ElementPanel.tsx stays open on it, so
+    // its Hide button flips to Show and one click undoes a mistake.
+    // BuildingModel.tsx drops the brass outline for a hidden selection
+    // itself, since there's nothing visible left to outline.
+    hiddenElementIds: new Set<string>(),
+    toggleElementVisibility: (meshName) =>
+      set((state) => {
+        const hidden = new Set(state.hiddenElementIds);
+        if (hidden.has(meshName)) {
+          hidden.delete(meshName);
+        } else {
+          hidden.add(meshName);
+        }
+        return applyHidden(hidden, state.hoveredElementId);
+      }),
+    toggleCategoryVisibility: (category) =>
+      set((state) => {
+        const meshNames = state.elements
+          .filter((element) => element.category === category)
+          .map((element) => element.meshName);
+        const allHidden = meshNames.every((meshName) => state.hiddenElementIds.has(meshName));
+        const hidden = new Set(state.hiddenElementIds);
+        for (const meshName of meshNames) {
+          if (allHidden) {
+            hidden.delete(meshName);
+          } else {
+            hidden.add(meshName);
+          }
+        }
+        return applyHidden(hidden, state.hoveredElementId);
+      }),
+    resetVisibility: () => set({ hiddenElementIds: new Set<string>() }),
 
     mode: "review",
     pendingPin: null,

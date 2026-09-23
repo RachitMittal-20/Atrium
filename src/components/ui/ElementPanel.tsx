@@ -30,10 +30,22 @@
  * panel's own slide in/out and the mobile drag-to-dismiss gesture — plain
  * DOM transitions, nothing 3D.
  *
- * The "Pin a comment" button at the bottom hands off to spatial
- * annotation: it closes this panel and arms pin mode (projectStore's
- * enterPinMode), the same as pressing "C" — see ModeIndicator.tsx and
- * BuildingModel.tsx for the rest of that flow.
+ * The footer holds two actions:
+ *  - "Hide element" / "Show element" calls projectStore's
+ *    toggleElementVisibility for this element's meshName — the
+ *    per-element half of visibility (VisibilityToolbar.tsx is the
+ *    per-category half). BuildingModel.tsx reads the resulting
+ *    hiddenElementIds on the other side of the Canvas boundary and makes
+ *    the mesh both invisible and un-hittable, so the next click lands on
+ *    whatever was behind it. The panel deliberately stays open on a
+ *    hidden element — hiding doesn't clear selection — so the same button
+ *    flips to "Show element" and one click undoes a mistake; a small
+ *    "Hidden in model" note under the status says why the brass outline
+ *    has disappeared.
+ *  - "Pin a comment" hands off to spatial annotation: it closes this
+ *    panel and arms pin mode (projectStore's enterPinMode), the same as
+ *    pressing "C" — see ModeIndicator.tsx and BuildingModel.tsx for the
+ *    rest of that flow.
  *
  * History is a collapsed-by-default affordance (plain local useState,
  * reset for free on every element switch since this component fully
@@ -79,10 +91,18 @@ export function ElementPanel() {
   const selectedElementId = useProjectStore((state) => state.selectedElementId);
   const elements = useProjectStore((state) => state.elements);
   const clearSelected = useProjectStore((state) => state.clearSelected);
+  const toggleElementVisibility = useProjectStore((state) => state.toggleElementVisibility);
 
   const element = useMemo(
     () => elements.find((candidate) => candidate.meshName === selectedElementId) ?? null,
     [elements, selectedElementId],
+  );
+  // A boolean selector, not the whole hiddenElementIds set: this panel
+  // only re-renders when *this* element's visibility changes, never when
+  // VisibilityToolbar hides some unrelated category — the same reasoning
+  // as the useShallow thread selector just below.
+  const isHidden = useProjectStore((state) =>
+    element ? state.hiddenElementIds.has(element.meshName) : false,
   );
   // useShallow, not a plain selector + useMemo: subscribing to the whole
   // `annotations` array (as this used to) re-renders this panel on *every*
@@ -212,6 +232,12 @@ export function ElementPanel() {
                 <span className="font-mono text-2xs uppercase tracking-[0.18em] text-ink">{element.status}</span>
               </div>
 
+              {/* Explains why the selected element's outline vanished — it's
+                  hidden in the model, not deselected (see file header). */}
+              {isHidden && (
+                <p className="mt-2 font-mono text-3xs uppercase tracking-[0.18em] text-faint">Hidden in model</p>
+              )}
+
               <Rule className="my-5" label="Specification" />
               <div>
                 {Object.entries(element.specification).map(([key, value], index, all) => (
@@ -299,7 +325,19 @@ export function ElementPanel() {
             </div>
           )}
 
-          <div className="border-t border-rule px-6 py-5">
+          {/* Footer actions — see file header. Hide/Show is the quieter
+              ghost button stacked above; pinning a comment stays the
+              primary, full-width action at the very bottom. */}
+          <div className="flex flex-col gap-2 border-t border-rule px-6 py-5">
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              aria-pressed={isHidden}
+              onClick={() => toggleElementVisibility(element.meshName)}
+            >
+              {isHidden ? "Show element" : "Hide element"}
+            </Button>
             <Button
               type="button"
               variant="primary"

@@ -57,7 +57,7 @@ import { isTypingTarget } from "@/lib/keyboard";
 import { useIsMobile } from "@/lib/responsive";
 import { Label } from "./Label";
 import { Rule } from "./Rule";
-import type { Annotation, ElementCategory } from "@/types/project";
+import { ELEMENT_CATEGORIES, type Annotation, type ElementCategory } from "@/types/project";
 
 const PANEL_WIDTH = 320;
 const RAIL_WIDTH = 56;
@@ -66,10 +66,6 @@ const RAIL_WIDTH = 56;
 // — long enough to register as "something just happened here", short
 // enough to not linger and read as a persistent status.
 const FLASH_DURATION = 1.2;
-
-// ElementCategory (types/project.ts) isn't a runtime enum, so the filter
-// select's option list has to be hand-kept in sync with it.
-const CATEGORIES: ElementCategory[] = ["Furniture", "Fixture", "Finish", "Structural", "Lighting"];
 
 type StatusFilter = "all" | "open" | "resolved";
 type CategoryFilter = ElementCategory | "all";
@@ -256,7 +252,10 @@ export function AnnotationRows() {
           className="border border-rule bg-surface2 px-2 py-1.5 font-mono text-3xs uppercase tracking-[0.18em] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
         >
           <option value="all">All categories</option>
-          {CATEGORIES.map((category) => (
+          {/* ELEMENT_CATEGORIES is the one runtime list ElementCategory itself
+              is derived from (types/project.ts) — shared with
+              VisibilityToolbar.tsx's chips, never hand-kept in sync. */}
+          {ELEMENT_CATEGORIES.map((category) => (
             <option key={category} value={category}>
               {category}
             </option>
