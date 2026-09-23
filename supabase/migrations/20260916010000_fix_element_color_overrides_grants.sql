@@ -1,0 +1,35 @@
+-- ATRIUM — fix element_color_overrides grants for upsert
+--
+-- 20260916000000_element_color_overrides.sql granted anon a column-scoped
+-- UPDATE — `color, updated_at` only — mirroring annotations' narrow
+-- "reviewers can change status, nothing else" pattern. That doesn't fit
+-- this table's actual write path: src/lib/queries.ts's setColorOverride
+-- writes through a single `.upsert(..., { onConflict: "element_id" })`
+-- call that always sends the *whole* row (project_id, element_id, color,
+-- updated_at). Supabase's default upsert strategy (merge-duplicates)
+-- compiles that into
+--   INSERT ... ON CONFLICT (element_id) DO UPDATE
+--     SET project_id = excluded.project_id, element_id = excluded.element_id,
+--         color = excluded.color, updated_at = excluded.updated_at
+-- — every column in the payload, not just color. Postgres checks column
+-- privileges for the entire DO UPDATE SET clause at parse time, for every
+-- column it targets, regardless of whether a real conflict occurs at
+-- runtime — so the missing UPDATE privilege on project_id/element_id
+-- broke every call, including a brand-new element's very first recolor,
+-- not only a second recolor of the same element the "on conflict" name
+-- might suggest. (INSERT itself was never the constrained privilege —
+-- the prior migration already grants anon a full, unscoped INSERT.)
+--
+-- The narrower UPDATE grant also wasn't protecting anything real: anon
+-- already holds full-row INSERT and DELETE on this table, so "can't
+-- repoint an existing override's element_id via UPDATE" was never an
+-- actual barrier — the same effect is one DELETE and one INSERT away
+-- regardless. Column-scoping UPDATE here bought no real security, only
+-- broke the one legitimate write path the table exists for.
+--
+-- Fix: grant full-row UPDATE, matching the full-row INSERT this table
+-- already has. A plain `grant` is additive, not a replacement — this
+-- simply extends anon's existing column-scoped UPDATE grant to cover
+-- every column; nothing needs to be revoked first.
+-- -----------------------------------------------------------------------
+grant update on public.element_color_overrides to anon;
