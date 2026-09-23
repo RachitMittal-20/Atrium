@@ -67,11 +67,13 @@
  * all (see AnnotationMarker.tsx), so nothing about them needed touching.
  *
  * Entering/leaving walkthrough never resets the camera to some fixed
- * view: on mount, this saves the camera's exact position+quaternion
- * (wherever OrbitControls last left them) and only then drops to eye
- * height; on unmount (switching back to ORBIT), it restores that exact
- * saved position+quaternion before OrbitControls re-enables — so orbit
- * mode resumes from precisely where it was, not a hard reset. This is
+ * view: on mount, this starts from the camera's live pose (wherever the
+ * previous mode left it) and only then drops to eye height. It doesn't
+ * save or restore anything itself: Scene.tsx's Model() snapshots the
+ * orbit pose the moment cameraMode leaves "orbit" and puts it back the
+ * moment it returns, so orbit resumes from precisely where it was, while
+ * a switch straight to PANORAMA keeps this mode's eye position (see
+ * Scene.tsx's header for why that can't live in this file). This is
  * also why Scene.tsx renders OrbitControls with `enabled={false}` rather
  * than unmounting it during walkthrough: an unmounted-then-remounted
  * OrbitControls would construct a *new* instance with target reset to the
@@ -92,6 +94,11 @@
  * start means the next look-around always continues smoothly from
  * wherever the camera actually is, instead of snapping back to a stale
  * angle.
+ *
+ * LOOK_SENSITIVITY, ROTATE_SPEED_RADIANS_PER_SEC and MAX_PITCH are
+ * exported: PanoramaControls.tsx (the fixed-point look-around mode)
+ * imports these exact values rather than restating them, so drag-to-look
+ * and Q/E feel identical in both modes and a retune here reaches both.
  */
 "use client";
 
@@ -137,17 +144,17 @@ const MOVE_SPEED_RATIO = 0.35;
 // change at the exact instant of mouseup, with zero further drift over
 // the following half-second of sampling — nothing to reduce or remove
 // here.
-const LOOK_SENSITIVITY = 0.0025;
+export const LOOK_SENSITIVITY = 0.0025;
 
 // Q/E hands-free turn rate — 90°/s, a full 360° turn in 4s. Tuned by
 // feel, fast enough to actually be useful for looking around, slow
 // enough not to be disorienting.
-const ROTATE_SPEED_RADIANS_PER_SEC = Math.PI / 2;
+export const ROTATE_SPEED_RADIANS_PER_SEC = Math.PI / 2;
 
 // Just short of straight up/down, so the camera can never flip past
 // vertical (a gimbal-adjacent glitch with Euler angles, not a real
 // three.js limitation — clamping pitch sidesteps it entirely).
-const MAX_PITCH = Math.PI / 2 - 0.05;
+export const MAX_PITCH = Math.PI / 2 - 0.05;
 
 // How far past the model's own footprint the camera can wander before
 // being clamped back — "keep the camera from flying miles outside the
@@ -180,7 +187,8 @@ const HELD_KEYS = new Set([
 // across calls instead of allocated fresh each frame, the same pattern
 // AnnotationMarker.tsx's own _worldPosition scratch uses. Safe as a
 // module singleton since only one WalkthroughControls is ever mounted at
-// a time (cameraMode is exactly one of "orbit" | "walkthrough").
+// a time (cameraMode is exactly one of "orbit" | "walkthrough" |
+// "panorama", and only "walkthrough" mounts this).
 const _rayOrigin = new THREE.Vector3();
 const _rayDown = new THREE.Vector3(0, -1, 0);
 
@@ -208,8 +216,6 @@ export function WalkthroughControls({ bounds, radius, floorY, metersPerUnit }: W
   const invalidate = useThree((state) => state.invalidate);
   const gl = useThree((state) => state.gl);
 
-  const savedPosition = useRef<THREE.Vector3 | null>(null);
-  const savedQuaternion = useRef<THREE.Quaternion | null>(null);
   const keysRef = useRef<Set<string>>(new Set());
   const yawRef = useRef(0);
   const pitchRef = useRef(0);
@@ -258,20 +264,17 @@ export function WalkthroughControls({ bounds, radius, floorY, metersPerUnit }: W
   const clampEyeY = (desiredY: number, floorAtPosition: number): number =>
     THREE.MathUtils.clamp(desiredY, floorAtPosition + floorMarginUnits, bounds.max.y - ceilingMarginUnits);
 
-  // Entering walkthrough: remember exactly where orbit mode left the
-  // camera (restored verbatim on unmount below), seed yaw/pitch from that
-  // same orientation so the first WASD press moves the direction the
-  // camera is actually already facing, then drop to eye height without
-  // otherwise moving it.
+  // Entering walkthrough: seed yaw/pitch from the camera's live
+  // orientation so the first WASD press moves the direction the camera is
+  // actually already facing, then drop to eye height without otherwise
+  // moving it. (Saving/restoring the orbit pose is Scene.tsx's job — see
+  // file header.)
   //
   // `camera` is a THREE.Camera instance reached via useThree — an
   // imperative three.js object, not React state — so mutating it via
   // .set()/.copy() here is the normal, correct r3f pattern (Scene.tsx's
   // own Model() does the same for near/far).
   useEffect(() => {
-    savedPosition.current = camera.position.clone();
-    savedQuaternion.current = camera.quaternion.clone();
-
     const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
     yawRef.current = euler.y;
     pitchRef.current = euler.x;
@@ -284,12 +287,6 @@ export function WalkthroughControls({ bounds, radius, floorY, metersPerUnit }: W
     const startFloorY = resolveFloorY(startX, startZ);
     camera.position.set(startX, clampEyeY(startFloorY + eyeHeightUnits, startFloorY), startZ);
     invalidate();
-
-    return () => {
-      if (savedPosition.current) camera.position.copy(savedPosition.current);
-      if (savedQuaternion.current) camera.quaternion.copy(savedQuaternion.current);
-      invalidate();
-    };
     // Deliberately run this once per mount/unmount only — re-running
     // mid-session because eyeHeightUnits/minX/etc. happened to recompute
     // (they're plain numbers derived from props each render, not stable

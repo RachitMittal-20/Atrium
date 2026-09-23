@@ -8,7 +8,7 @@
  * the graphite ground showing through wherever the model doesn't.
  * ModeIndicator mirrors it top-right with the Review/Pin badge,
  * PresenceIndicator stacks directly below it with the same alignment,
- * CameraModeToggle (the ORBIT/WALKTHROUGH switch) stacks below that, and
+ * CameraModeToggle (the ORBIT/WALKTHROUGH/PANORAMA switch) stacks below that, and
  * ControlsHelp (a dismissible "?" reference for the camera bindings each
  * mode actually uses) stacks below that. VisibilityToolbar (per-category
  * show/hide chips + Reset) takes the otherwise-free bottom-right corner,

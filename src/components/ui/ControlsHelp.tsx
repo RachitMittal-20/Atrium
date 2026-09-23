@@ -32,6 +32,9 @@
  *     ROTATE_LEFT_KEYS/ROTATE_RIGHT_KEYS (Q/E), and its pointerdown
  *     handler (`if (event.button !== 0) return` — left mouse button
  *     specifically) are the exact source for the four rows below.
+ *   - Panorama: PanoramaControls.tsx's own left-button drag handler and
+ *     ROTATE_LEFT_KEYS/ROTATE_RIGHT_KEYS (Q/E) — its only two inputs,
+ *     since that mode never moves the camera, only turns it.
  *
  * Auto-opens once per browser tab (sessionStorage, not localStorage —
  * "once per session" is exactly what sessionStorage already means, and a
@@ -141,6 +144,20 @@ export function ControlsHelp() {
                 <div className="flex justify-between gap-3 text-2xs">
                   <dt className="text-faint">Up / Down</dt>
                   <dd className="text-ink">Eye height</dd>
+                </div>
+                <div className="flex justify-between gap-3 text-2xs">
+                  <dt className="text-faint">Q / E</dt>
+                  <dd className="text-ink">Rotate view</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div>
+              <p className="font-mono text-3xs uppercase tracking-[0.18em] text-faint">Panorama</p>
+              <dl className="mt-1.5 space-y-1">
+                <div className="flex justify-between gap-3 text-2xs">
+                  <dt className="text-faint">Drag</dt>
+                  <dd className="text-ink">Look around</dd>
                 </div>
                 <div className="flex justify-between gap-3 text-2xs">
                   <dt className="text-faint">Q / E</dt>

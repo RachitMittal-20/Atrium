@@ -74,15 +74,33 @@
  * down to WalkthroughControls.tsx so its eye-height and vertical-range
  * constants can be stated in real metres instead of an arbitrary ratio.
  *
- * Camera mode: projectStore's cameraMode ("orbit" | "walkthrough", driven
- * by CameraModeToggle.tsx) decides which of two mutually-exclusive
- * controls drives the camera each frame — OrbitControls (unchanged from
- * before this existed) or WalkthroughControls (new; see its own file for
- * why it's a fully separate component rather than a mode branch bolted
- * onto OrbitControls). OrbitControls itself is never unmounted for this —
- * only `enabled` toggles — so its target/pan state survives a round trip
- * through walkthrough mode; see WalkthroughControls.tsx's header for why
- * that matters.
+ * Camera mode: projectStore's cameraMode ("orbit" | "walkthrough" |
+ * "panorama", driven by CameraModeToggle.tsx) decides which of three
+ * mutually-exclusive controls drives the camera each frame —
+ * OrbitControls (unchanged from before this existed), WalkthroughControls
+ * (see its own file for why it's a fully separate component rather than a
+ * mode branch bolted onto OrbitControls), or PanoramaControls (a
+ * stripped-down sibling of WalkthroughControls: look-around only, the
+ * camera never translates). OrbitControls itself is never unmounted for
+ * either of the other two — only `enabled` toggles, and it's `=== "orbit"`
+ * so both non-orbit modes disable it (and SmoothZoom) without listing
+ * them — so its target/pan state survives a round trip through either
+ * mode; see WalkthroughControls.tsx's header for why that matters.
+ *
+ * The orbit camera pose itself is saved and restored here, in Model(),
+ * not by the walkthrough/panorama controllers: saved the moment
+ * cameraMode *leaves* "orbit", restored the moment it *returns*, and
+ * never touched on a switch between the two non-orbit modes. Each
+ * non-orbit controller just starts from the camera's live pose on mount.
+ * Why not per-controller save/restore (as it used to be): React runs a
+ * departing component's effect cleanup *before* the arriving one's mount
+ * effect, so walkthrough's "restore the orbit pose on unmount" always
+ * fired first, and panorama then "started from where the camera was"
+ * — which was the orbit pose, never walkthrough's eye position. And
+ * panorama restoring *its* start pose on unmount would, in turn, have
+ * handed a walkthrough eye pose back to orbit. Only something that
+ * outlives both controllers, and knows which mode is orbit, can get every
+ * transition right; see the orbit-pose layout effect in Model() below.
  *
  * frameloop stays "demand" in every camera mode, including walkthrough —
  * it briefly switched to "always" while that mode was active, on the
@@ -112,6 +130,7 @@ import {
 import { BuildingModel } from "@/components/three/BuildingModel";
 import { SmoothZoom } from "@/components/three/SmoothZoom";
 import { WalkthroughControls } from "@/components/three/WalkthroughControls";
+import { PanoramaControls } from "@/components/three/PanoramaControls";
 import { HDRI_STUDIO_PATH } from "@/lib/assets";
 import { useScrollStore } from "@/store/scrollStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -276,6 +295,40 @@ function Model() {
     setExtent({ size, radius: sphere.radius, box: box.clone(), floorY, metersPerUnit });
     invalidate();
   }, [camera, invalidate]);
+
+  // Orbit's own camera pose across a non-orbit excursion (see file
+  // header). previousModeRef lets this tell "which way did cameraMode
+  // just change" apart from "cameraMode didn't change" (first mount,
+  // StrictMode's re-run, an unrelated re-render).
+  //
+  // A layout effect, not a plain effect, and that's what makes it work:
+  // React runs every layout effect in a commit before any passive
+  // (useEffect) mount effect in it. So on orbit → walkthrough, the
+  // pose is saved here *before* WalkthroughControls' own mount effect
+  // drops the camera to eye height, and on walkthrough/panorama → orbit
+  // it's restored before OrbitControls' next update() reads the camera.
+  // Same imperative-camera-mutation lint note as the effect above.
+  const previousModeRef = useRef(cameraMode);
+  const orbitPoseRef = useRef<{ position: THREE.Vector3; quaternion: THREE.Quaternion } | null>(null);
+  useLayoutEffect(() => {
+    const previous = previousModeRef.current;
+    previousModeRef.current = cameraMode;
+    if (previous === cameraMode) return;
+
+    if (previous === "orbit") {
+      // Leaving orbit, for either non-orbit mode: snapshot it.
+      orbitPoseRef.current = { position: camera.position.clone(), quaternion: camera.quaternion.clone() };
+    } else if (cameraMode === "orbit" && orbitPoseRef.current) {
+      // Back to orbit from either non-orbit mode: put it back exactly.
+      camera.position.copy(orbitPoseRef.current.position);
+      camera.quaternion.copy(orbitPoseRef.current.quaternion);
+      orbitPoseRef.current = null;
+      invalidate();
+    }
+    // walkthrough ↔ panorama: deliberately nothing. The arriving
+    // controller picks up the camera's live pose as it is, and the saved
+    // orbit pose stays put for whenever orbit comes back.
+  }, [cameraMode, camera, invalidate]);
   /* eslint-enable react-hooks/immutability */
 
   return (
@@ -399,6 +452,16 @@ function Model() {
           metersPerUnit={extent.metersPerUnit}
         />
       )}
+
+      {/* Same disable-don't-unmount arrangement as walkthrough above:
+          OrbitControls stays mounted with enabled={false} underneath, and
+          this saves/restores the camera pose itself. Takes no props — it
+          never moves the camera, so it needs none of the extent-derived
+          bounds/floor/scale values walkthrough clamps against. Still
+          gated on `extent` so it can't mount before OrbitControls has,
+          and so its saved pose is the real framed view, not the default
+          camera. */}
+      {extent && cameraMode === "panorama" && <PanoramaControls />}
     </>
   );
 }

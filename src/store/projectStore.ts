@@ -49,14 +49,17 @@
  * single bottom sheet (SPEC/COMMENTS tabs) rather than stacking two —
  * see ReviewList.tsx's file header for the full mobile layout rationale.
  *
- * `cameraMode` is the ORBIT/WALKTHROUGH toggle CameraModeToggle.tsx
- * displays and drives — orthogonal to `mode` above (review/pin is about
- * what a click *does*; cameraMode is about how the camera itself moves),
- * so the two combine freely: pinning a comment while walking through
- * works exactly like pinning one while orbiting. Scene.tsx reads this to
- * decide which controls (OrbitControls vs WalkthroughControls) are
+ * `cameraMode` is the ORBIT/WALKTHROUGH/PANORAMA toggle
+ * CameraModeToggle.tsx displays and drives — orthogonal to `mode` above
+ * (review/pin is about what a click *does*; cameraMode is about how the
+ * camera itself moves), so the two combine freely: pinning a comment
+ * while walking through or looking around in panorama works exactly like
+ * pinning one while orbiting. Scene.tsx reads this to decide which
+ * controls (OrbitControls, WalkthroughControls or PanoramaControls) are
  * driving the camera this frame; nothing about annotations, review mode,
- * or realtime sync reads it at all.
+ * or realtime sync reads it at all. Nothing branches on it exhaustively
+ * either — every reader asks "is it orbit?" or "is it <one mode>?" —
+ * so adding a mode needs no store changes beyond the union below.
  *
  * `hiddenElementIds` is element visibility: the meshNames currently
  * hidden from the 3D scene. Unlike the viewport bridge above this *is*
@@ -120,7 +123,9 @@ interface ViewportBridge {
 
 export type ProjectMode = "review" | "pin";
 export type MobileTab = "spec" | "comments";
-export type CameraMode = "orbit" | "walkthrough";
+/** "panorama" = fixed-point look-around, no translation — see
+ *  src/components/three/PanoramaControls.tsx. */
+export type CameraMode = "orbit" | "walkthrough" | "panorama";
 
 export interface PendingPin {
   position: Vec3;
@@ -248,7 +253,7 @@ interface ProjectState {
   mobileTab: MobileTab;
   setMobileTab: (tab: MobileTab) => void;
 
-  // --- Camera mode: orbit vs walkthrough (see file header) ---
+  // --- Camera mode: orbit / walkthrough / panorama (see file header) ---
   cameraMode: CameraMode;
   setCameraMode: (mode: CameraMode) => void;
 
