@@ -17,6 +17,31 @@
  * is what keeps the list and the union from ever drifting apart.
  */
 
+/**
+ * A reviewer-applied color override for one Element — "recolor this
+ * sofa," not a spec-sheet edit (see Element.specification's own comment:
+ * the FF&E schedule is authored by the design studio, not written to by
+ * reviewers). Keyed by elementId (Element.id, the database row's real
+ * primary key) because that's the foreign key
+ * supabase/migrations/20260916000000_element_color_overrides.sql
+ * actually stores — src/store/projectStore.ts's own elementColors Map
+ * re-keys this by meshName instead, for BuildingModel.tsx's convenience
+ * (it only ever knows a mesh's id, not its Element row), converting via
+ * the elements array both there and in that migration's mapped read/
+ * write functions below. No override for a given element means "use the
+ * model's original material color" — there is no "reset" value; the
+ * absence of a row (here) or a Map entry (in the store) is what
+ * "original" means, matching that migration's own not-null color column.
+ * See src/lib/queries.ts's getColorOverrides/setColorOverride/
+ * deleteColorOverride for the read/write path this shape flows through.
+ */
+export interface ElementColorOverride {
+  elementId: string;
+  /** A hex color string, e.g. "#8DAE84" — check-constrained to that exact
+   *  shape at the database layer (see the migration referenced above). */
+  color: string;
+}
+
 /** A 3D point or direction — reused for both Annotation.position and .normal. */
 export type Vec3 = [x: number, y: number, z: number];
 

@@ -48,6 +48,9 @@ export function RealtimeProvider({ projectId, isDemoData }: RealtimeProviderProp
     const unsubscribe = subscribeToProject(projectId, self, {
       onAnnotationInsert: (annotation) => useProjectStore.getState().mergeRemoteAnnotation(annotation),
       onReplyInsert: (annotationId, reply) => useProjectStore.getState().mergeRemoteReply(annotationId, reply),
+      onColorOverrideUpsert: (elementId, color) =>
+        useProjectStore.getState().mergeRemoteColorOverride(elementId, color),
+      onColorOverrideRemoved: (elementId) => useProjectStore.getState().mergeRemoteColorOverrideRemoved(elementId),
       onPresenceSync: (reviewers) => useProjectStore.getState().setPresentReviewers(reviewers),
       onStatusChange: (status) => useProjectStore.getState().setConnectionStatus(status),
     });

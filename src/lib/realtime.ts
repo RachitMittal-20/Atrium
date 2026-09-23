@@ -2,18 +2,20 @@
  * src/lib/realtime.ts
  *
  * The live multi-reviewer sync layer: one Supabase Realtime channel per
- * project, combining Postgres Changes (new annotations, new replies) with
- * Presence (who else is currently looking at this project). This is a
- * plain module, not a component — src/components/RealtimeProvider.tsx is
- * the one caller, from inside a useEffect, so every rule that file's own
- * header explains about client-only, per-session, post-mount state
- * applies to everything this module does too.
+ * project, combining Postgres Changes (new annotations, new replies,
+ * element color overrides being set or removed) with Presence (who else
+ * is currently looking at this project). This is a plain module, not a
+ * component — src/components/RealtimeProvider.tsx is the one caller,
+ * from inside a useEffect, so every rule that file's own header explains
+ * about client-only, per-session, post-mount state applies to everything
+ * this module does too.
  *
  * Imports supabase directly, alongside src/lib/queries.ts — see that
  * file's header for why there are now two direct importers instead of
- * one. mapAnnotation/mapReply are reused from queries.ts rather than
- * duplicated, so a row arriving over the wire is shaped identically to
- * one loaded by getAnnotations on first paint.
+ * one. mapAnnotation/mapReply/mapColorOverride are reused from
+ * queries.ts rather than duplicated, so a row arriving over the wire is
+ * shaped identically to one loaded by getAnnotations/getColorOverrides
+ * on first paint.
  *
  * Typing note: @supabase/supabase-js's public export surface doesn't
  * re-export RealtimeChannel/RealtimePostgresChangesPayload — those types
@@ -33,7 +35,14 @@
  * which renders exactly this status rather than a static "Live" label.
  */
 import { supabase } from "@/lib/supabase";
-import { mapAnnotation, mapReply, type AnnotationRow, type AnnotationReplyRow } from "@/lib/queries";
+import {
+  mapAnnotation,
+  mapColorOverride,
+  mapReply,
+  type AnnotationRow,
+  type AnnotationReplyRow,
+  type ElementColorOverrideRow,
+} from "@/lib/queries";
 import type { Annotation, AnnotationReply } from "@/types/project";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
@@ -61,6 +70,17 @@ export interface RealtimeHandlers {
    *  client currently has loaded; projectStore's mergeRemoteReply is what
    *  actually filters that, not this module (see that action's header). */
   onReplyInsert: (annotationId: string, reply: AnnotationReply) => void;
+  /** An element_color_overrides row was inserted or updated — a color was
+   *  set or changed on some element_id, which may or may not be one this
+   *  client currently has loaded; projectStore's mergeRemoteColorOverride
+   *  resolves element_id -> meshName and no-ops if it isn't (see that
+   *  action's own comment). One handler for both INSERT and UPDATE: both
+   *  mean the same thing to a reader ("this element's color is now X"),
+   *  the same reason mapColorOverride doesn't distinguish them either. */
+  onColorOverrideUpsert: (elementId: string, color: string) => void;
+  /** An element_color_overrides row was deleted — "reset to original" on
+   *  some element_id. */
+  onColorOverrideRemoved: (elementId: string) => void;
   /** The full set of currently-present reviewers, replacing whatever the
    *  caller was previously showing — called on every presence sync, which
    *  is Supabase's own debounced "join+leave settled" event, not a raw
@@ -102,9 +122,10 @@ const MAX_RETRY_MS = 15000;
 
 /**
  * Opens (and, on drop, reopens) the one realtime channel for a project:
- * Postgres Changes on annotations/annotation_replies plus this client's
- * own presence. Returns a cleanup function that tears everything down —
- * RealtimeProvider calls it from its effect's own cleanup.
+ * Postgres Changes on annotations/annotation_replies/
+ * element_color_overrides plus this client's own presence. Returns a
+ * cleanup function that tears everything down — RealtimeProvider calls
+ * it from its effect's own cleanup.
  *
  * annotation_replies has no project_id column to filter on server-side,
  * so every reply insert for every project reaches every subscribed
@@ -113,6 +134,9 @@ const MAX_RETRY_MS = 15000;
  * the annotation_id isn't one it currently has loaded — see that action's
  * own comment. That's an acceptable filter point for a single-project app
  * like this one; a multi-project deployment would need a real column.
+ * element_color_overrides, by contrast, does carry project_id (see its
+ * own migration's comment on why), so its three subscriptions below
+ * filter server-side the same way annotations' own does.
  */
 export function subscribeToProject(projectId: string, self: Reviewer, handlers: RealtimeHandlers): () => void {
   const client = supabase;
@@ -203,6 +227,45 @@ export function subscribeToProject(projectId: string, self: Reviewer, handlers: 
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "annotation_replies" },
         (payload) => handlers.onReplyInsert(payload.new.annotation_id, mapReply(payload.new)),
+      )
+      // element_color_overrides is an upsert table from the app's point of
+      // view (see src/lib/queries.ts's setColorOverride) — the first color
+      // set on an element is an INSERT, a later recolor is an UPDATE of the
+      // same row, and both mean exactly the same thing to a remote client:
+      // "this element's color is now X." One handler covers both.
+      .on<ElementColorOverrideRow>(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "element_color_overrides", filter: `project_id=eq.${projectId}` },
+        (payload) => {
+          const override = mapColorOverride(payload.new);
+          handlers.onColorOverrideUpsert(override.elementId, override.color);
+        },
+      )
+      .on<ElementColorOverrideRow>(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "element_color_overrides", filter: `project_id=eq.${projectId}` },
+        (payload) => {
+          const override = mapColorOverride(payload.new);
+          handlers.onColorOverrideUpsert(override.elementId, override.color);
+        },
+      )
+      // DELETE, unlike the two above, has no `new` row — element_id has to
+      // come from `old` instead. That's only populated because the
+      // element_color_overrides migration sets REPLICA IDENTITY FULL on
+      // this table specifically for this: Postgres's default replica
+      // identity would only put the row's own primary key (`id`, a value
+      // no other client already has cached) into a DELETE payload's `old`,
+      // not `element_id` — see that migration's own comment. The `?.`
+      // guard is defense against that setting ever being missing (a local
+      // dev database the migration hasn't run against yet, say), not an
+      // expected path against the real schema.
+      .on<ElementColorOverrideRow>(
+        "postgres_changes",
+        { event: "DELETE", schema: "public", table: "element_color_overrides", filter: `project_id=eq.${projectId}` },
+        (payload) => {
+          const elementId = payload.old?.element_id;
+          if (elementId) handlers.onColorOverrideRemoved(elementId);
+        },
       )
       .on("presence", { event: "sync" }, () => {
         const state = nextChannel.presenceState<Reviewer>();

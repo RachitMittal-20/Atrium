@@ -11,10 +11,11 @@
  * always runs, synchronously, so that fallback is never visible.
  *
  * `isDemoData` says which of those two the store is currently holding —
- * DemoDataBadge.tsx reads it to show the corner label, pinAnnotation()
- * reads it to decide whether a new pin is worth even trying to persist,
- * and src/components/RealtimeProvider.tsx reads it to decide whether
- * there's a real backend worth subscribing to at all.
+ * DemoDataBadge.tsx reads it to show the corner label, pinAnnotation()/
+ * setElementColor()/clearElementColor() read it to decide whether a
+ * write is worth even trying to persist, and src/components/
+ * RealtimeProvider.tsx reads it to decide whether there's a real backend
+ * worth subscribing to at all.
  *
  * Still the one bridge across the Canvas boundary — BuildingModel writes
  * hoveredElementId/selectedElementId from inside the Canvas, any DOM UI
@@ -76,13 +77,36 @@
  * per-element hide can never disagree about the same mesh. Purely
  * client-side for now: nothing here is persisted or synced over realtime.
  *
+ * `elementColors` is element recoloring — a Map from meshName to the hex
+ * color currently applied, read by BuildingModel.tsx to tint that mesh's
+ * cloned material (see that file's own comment on why cloning per mesh
+ * makes this safe). Keyed by meshName rather than Element.id, unlike the
+ * database table backing it (see ElementColorOverride's own comment in
+ * src/types/project.ts) — that's purely for BuildingModel's convenience,
+ * since a mesh only ever knows its own id, not the Element row it maps
+ * to; setElementColor/clearElementColor and the mergeRemote* actions
+ * below all do the meshName<->elementId conversion via `elements`
+ * internally, so nothing outside this store ever has to. Unlike
+ * hiddenElementIds, this genuinely does persist and sync: setElementColor/
+ * clearElementColor follow the *exact* optimistic-write-then-reconcile
+ * shape pinAnnotation does (apply locally first, persist after, roll back
+ * and offer Retry on failure — see setElementColor's own comment for the
+ * one place that shape has to differ, and why). The realtime echo those
+ * writes eventually receive back needs no annotations-style exists-dedupe
+ * guard the way mergeRemoteAnnotation does: a Map is naturally idempotent
+ * under a repeated set() to the same key/value, where mergeRemoteAnnotation
+ * dedupes specifically to stop an *array* from growing a duplicate entry —
+ * see mergeRemoteColorOverride's own comment for why copying that guard
+ * here would just be dead code.
+ *
  * Live multi-reviewer sync (mergeRemoteAnnotation, mergeRemoteReply,
- * remoteToast, presentReviewers, connectionStatus, selfReviewerId) is
- * driven entirely by src/components/RealtimeProvider.tsx from a
- * useEffect — never at module scope or during render, for the same
- * cross-request SSR reason ProjectHydrator.tsx's header explains at
- * length: this store is one Node-process-wide singleton, and Next.js
- * server-renders "use client" components by default.
+ * mergeRemoteColorOverride, mergeRemoteColorOverrideRemoved, remoteToast,
+ * presentReviewers, connectionStatus, selfReviewerId) is driven entirely
+ * by src/components/RealtimeProvider.tsx from a useEffect — never at
+ * module scope or during render, for the same cross-request SSR reason
+ * ProjectHydrator.tsx's header explains at length: this store is one
+ * Node-process-wide singleton, and Next.js server-renders "use client"
+ * components by default.
  *
  * mergeRemoteAnnotation is also this store's dedupe point for a client's
  * own optimistic writes: pinAnnotation always appends the optimistic row
@@ -111,6 +135,7 @@ import type {
   AnnotationReply,
   Element,
   ElementCategory,
+  ElementColorOverride,
   ElementRevisionEntry,
   Project,
   Vec3,
@@ -139,6 +164,13 @@ export interface HydrationData {
   project: Project;
   elements: Element[];
   annotations: Annotation[];
+  /** Every element color override currently set on the project — see
+   *  buildColorMap below for how this seeds elementColors. The local
+   *  demo data (src/data/project.ts) has no equivalent seed constant, so
+   *  the fallback path in src/app/project/page.tsx always passes `[]`
+   *  here, the same "nothing recolored yet" state a real, freshly-seeded
+   *  project would also start from. */
+  colorOverrides: ElementColorOverride[];
   isDemoData: boolean;
 }
 
@@ -193,7 +225,8 @@ interface ProjectState {
    */
   pinAnnotation: (input: PinAnnotationInput) => Promise<void>;
 
-  // --- Toast (surfaced by pinAnnotation's failure path) ---
+  // --- Toast (surfaced by pinAnnotation's/setElementColor's/
+  // clearElementColor's failure paths) ---
   toast: ToastState | null;
   showToast: (message: string, onRetry: () => void) => void;
   dismissToast: () => void;
@@ -225,6 +258,39 @@ interface ProjectState {
   toggleCategoryVisibility: (category: ElementCategory) => void;
   /** Shows everything again — VisibilityToolbar.tsx's Reset. */
   resetVisibility: () => void;
+
+  // --- Element color overrides (see file header) ---
+  /** meshName -> hex color currently applied. A key's absence means "use
+   *  the model's original material color" — same "absence, not a null/
+   *  sentinel value, is what original means" convention the database
+   *  table backing this uses (see ElementColorOverride's own comment).
+   *  Always replaced with a new Map on change, same reference-identity
+   *  reasoning as hiddenElementIds above. */
+  elementColors: ReadonlyMap<string, string>;
+  /**
+   * Sets (or replaces) one element's color. Applies it to local state
+   * synchronously first — the same "feels instant" reasoning
+   * pinAnnotation's own comment gives — then, unless this is demo data,
+   * persists it via src/lib/queries.ts's setColorOverride. On failure the
+   * map entry is rolled back to whatever it held immediately before this
+   * call (captured up front as `previous`), not simply deleted the way
+   * pinAnnotation's own rollback deletes its optimistic row outright —
+   * pinAnnotation's optimistic write is always a brand-new row with
+   * nothing to restore to, where this one can just as easily be *replacing*
+   * an already-successfully-set color, and rolling back to "no override at
+   * all" would be wrong if one was already there. A toast then offers
+   * Retry, which calls this same action again — identical shape to
+   * pinAnnotation's own failure path otherwise.
+   */
+  setElementColor: (meshName: string, color: string) => Promise<void>;
+  /**
+   * Clears one element's color override — "reset to original." Same
+   * optimistic-then-persist-then-roll-back-on-failure shape as
+   * setElementColor, with `previous` always defined here (there being
+   * nothing to clear when it isn't is handled by the early return below,
+   * before any state changes).
+   */
+  clearElementColor: (meshName: string) => Promise<void>;
 
   // --- Spatial annotation: pin mode ---
   mode: ProjectMode;
@@ -302,6 +368,24 @@ interface ProjectState {
    *  project filter the table doesn't support. Also dedupes a reply this
    *  client authored itself the same way mergeRemoteAnnotation does. */
   mergeRemoteReply: (annotationId: string, reply: AnnotationReply) => void;
+  /** Merges one element_color_overrides INSERT/UPDATE from a Postgres
+   *  Changes payload — src/lib/realtime.ts's onColorOverrideUpsert,
+   *  called for both events identically (see that module's own comment
+   *  on why they need no separate handling). Resolves the row's
+   *  element_id to a meshName via `elements` and no-ops if none matches
+   *  (an override for an element this client hasn't loaded — the same
+   *  posture mergeRemoteReply takes for an unmatched annotation_id).
+   *  Unlike mergeRemoteAnnotation, there is no exists-dedupe check here:
+   *  this client's own optimistic write echoing back through Realtime
+   *  just calls Map.set() with the same key and value again, which is
+   *  already a no-op in every way that matters (no duplicate entry is
+   *  possible in a Map the way one is in an array, and there's no flash/
+   *  toast/animation tied to a color change for a dedupe to protect). */
+  mergeRemoteColorOverride: (elementId: string, color: string) => void;
+  /** Merges one element_color_overrides DELETE — "someone reset this
+   *  element's color." Same element_id -> meshName resolution and
+   *  same-element no-op posture as mergeRemoteColorOverride above. */
+  mergeRemoteColorOverrideRemoved: (elementId: string) => void;
   /** The corner "New comment from X" toast — see RemoteCommentToast.tsx,
    *  which owns the auto-dismiss timer itself (the same split Toast.tsx
    *  uses: this store just holds the current message). */
@@ -346,6 +430,28 @@ function applyHidden(
   };
 }
 
+/**
+ * Builds the meshName -> color map hydrate() seeds elementColors with,
+ * from a HydrationData's elementId-keyed colorOverrides array — the one
+ * place that elementId -> meshName conversion happens for the *initial*
+ * load; every write path (setElementColor, clearElementColor, the two
+ * mergeRemoteColorOverride* actions) does the same conversion itself,
+ * inline, against whatever `elements` currently holds. An override whose
+ * elementId matches nothing in `elements` (a stale row referencing an
+ * element this project no longer has) is silently skipped, the same
+ * no-op posture every other remote-data-meets-local-state mismatch in
+ * this store already takes.
+ */
+function buildColorMap(elements: Element[], colorOverrides: ElementColorOverride[]): Map<string, string> {
+  const elementById = new Map(elements.map((element) => [element.id, element]));
+  const colors = new Map<string, string>();
+  for (const override of colorOverrides) {
+    const element = elementById.get(override.elementId);
+    if (element) colors.set(element.meshName, override.color);
+  }
+  return colors;
+}
+
 export const useProjectStore = create<ProjectState>((set, get) => {
   const viewport: ViewportBridge = { controls: null, invalidate: null };
   const elementObjects: Record<string, THREE.Object3D | null> = {};
@@ -361,6 +467,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         project: data.project,
         elements: data.elements,
         annotations: data.annotations,
+        elementColors: buildColorMap(data.elements, data.colorOverrides),
         isDemoData: data.isDemoData,
       }),
 
@@ -472,6 +579,86 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }),
     resetVisibility: () => set({ hiddenElementIds: new Set<string>() }),
 
+    // Element color overrides — see file header for the full shape.
+    elementColors: new Map<string, string>(),
+    setElementColor: async (meshName, color) => {
+      const previous = get().elementColors.get(meshName) ?? null;
+      set((state) => {
+        const next = new Map(state.elementColors);
+        next.set(meshName, color);
+        return { elementColors: next };
+      });
+
+      if (get().isDemoData) {
+        return;
+      }
+
+      // meshName not resolvable to a real Element (shouldn't happen —
+      // ElementPanel only ever calls this for the currently-selected
+      // element, which came from `elements` in the first place) — nothing
+      // to persist against, and the local map write above already applied.
+      const element = get().elements.find((candidate) => candidate.meshName === meshName);
+      if (!element) return;
+
+      try {
+        // Dynamic import for the same bundle-size reason pinAnnotation's
+        // own comment explains at length — this module is reachable from
+        // the marketing homepage's non-interactive Hero too.
+        const { setColorOverride } = await import("@/lib/queries");
+        await setColorOverride({ projectId: get().project.id, elementId: element.id, color });
+      } catch (error) {
+        set((state) => {
+          const next = new Map(state.elementColors);
+          if (previous === null) {
+            next.delete(meshName);
+          } else {
+            next.set(meshName, previous);
+          }
+          return { elementColors: next };
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("setElementColor failed:", message);
+        get().showToast("Could not save color — retry", () => {
+          get().dismissToast();
+          void get().setElementColor(meshName, color);
+        });
+      }
+    },
+    clearElementColor: async (meshName) => {
+      const previous = get().elementColors.get(meshName);
+      if (previous === undefined) return;
+
+      set((state) => {
+        const next = new Map(state.elementColors);
+        next.delete(meshName);
+        return { elementColors: next };
+      });
+
+      if (get().isDemoData) {
+        return;
+      }
+
+      const element = get().elements.find((candidate) => candidate.meshName === meshName);
+      if (!element) return;
+
+      try {
+        const { deleteColorOverride } = await import("@/lib/queries");
+        await deleteColorOverride(element.id);
+      } catch (error) {
+        set((state) => {
+          const next = new Map(state.elementColors);
+          next.set(meshName, previous);
+          return { elementColors: next };
+        });
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("clearElementColor failed:", message);
+        get().showToast("Could not reset color — retry", () => {
+          get().dismissToast();
+          void get().clearElementColor(meshName);
+        });
+      }
+    },
+
     mode: "review",
     pendingPin: null,
     enterPinMode: () => set({ mode: "pin", selectedElementId: null, pendingPin: null }),
@@ -540,6 +727,22 @@ export const useProjectStore = create<ProjectState>((set, get) => {
           return { ...annotation, replies: [...annotation.replies, reply] };
         }),
       })),
+    mergeRemoteColorOverride: (elementId, color) =>
+      set((state) => {
+        const element = state.elements.find((candidate) => candidate.id === elementId);
+        if (!element) return state;
+        const next = new Map(state.elementColors);
+        next.set(element.meshName, color);
+        return { elementColors: next };
+      }),
+    mergeRemoteColorOverrideRemoved: (elementId) =>
+      set((state) => {
+        const element = state.elements.find((candidate) => candidate.id === elementId);
+        if (!element) return state;
+        const next = new Map(state.elementColors);
+        next.delete(element.meshName);
+        return { elementColors: next };
+      }),
     remoteToast: null,
     dismissRemoteToast: () => set({ remoteToast: null }),
     presentReviewers: [],

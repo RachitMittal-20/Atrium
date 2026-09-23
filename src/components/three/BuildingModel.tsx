@@ -56,6 +56,27 @@
  * hide the floor and it falls back to its flat floorY, as documented in
  * that file for a ray that misses.)
  *
+ * Element color (projectStore's elementColors, a meshName -> hex color
+ * Map set from ElementPanel.tsx's color picker, persisted and synced to
+ * other reviewers via src/lib/queries.ts/realtime.ts) is applied in a
+ * dedicated effect below, separate from the hover/selection/visibility
+ * one: for every mesh, if elementColors has an entry, that mesh's cloned
+ * material's `.color` is set to it; otherwise it's restored to the
+ * material's own original color, captured once (per mesh, alongside the
+ * material clone itself) in the meshMaterials memo below as `baseColors`.
+ * This is exactly the "materials are already cloned per mesh, so
+ * mutating one mesh's material.color is safe" the header paragraph below
+ * describes — recoloring a sofa can never bleed into the media console
+ * sharing its source material. `.color` (the base albedo) and
+ * `.emissive`/`.emissiveIntensity` (the hover glow, above) are two
+ * different material properties that layer independently, so a recolored
+ * element still hovers/selects exactly like any other. Skipped entirely
+ * when `interactive` is false: the hero's meshMaterials map straight to
+ * the *shared* GLTF material dictionary rather than clones (see that prop
+ * below), and mutating `.color` there would repaint every BuildingModel
+ * instance sharing that cache, not just this one — the same reasoning
+ * that already excludes the hero from visibility toggling.
+ *
  * Each material is cloned per mesh (see meshMaterials below) rather than
  * used directly from the shared `materials` dictionary useGLTF returns:
  * two meshes here (the building's lower and full-height envelope) share
@@ -71,12 +92,13 @@
  * Pass `interactive={false}` (the hero's cinematic shot does) to skip all
  * of the above entirely — no cloned materials, no pointer handlers, no
  * Html label, no EffectComposer/Outline, no annotation markers/composer,
- * and no visibility toggling (the hero always shows the whole model, even
- * if something was hidden on /project earlier in the same session).
- * It's not just "interaction does nothing": r3f still raycasts every mesh
- * that has a pointer handler attached on every pointer move, so leaving
- * those handlers off altogether is what actually removes the cost, not
- * merely the visible effect.
+ * no visibility toggling, and no color overrides (the hero always shows
+ * the whole model in its original colors, even if something was hidden
+ * or recolored on /project earlier in the same session). It's not just
+ * "interaction does nothing": r3f still raycasts every mesh that has a
+ * pointer handler attached on every pointer move, so leaving those
+ * handlers off altogether is what actually removes the cost, not merely
+ * the visible effect.
  *
  * Annotation markers (AnnotationMarker) and the in-progress pin composer
  * (AnnotationComposer) are rendered as children of outerGroupRef — a
@@ -342,9 +364,9 @@ type BuildingModelProps = ThreeElements["group"] & {
   /**
    * Set false for a purely decorative shot (the hero): skips cloned
    * materials, pointer handlers, the hover label, the selection outline,
-   * annotation markers/composer, and visibility toggling entirely, rather
-   * than just leaving them visually inert. Defaults true — the
-   * interactive /project scene's normal behaviour.
+   * annotation markers/composer, visibility toggling, and color overrides
+   * entirely, rather than just leaving them visually inert. Defaults
+   * true — the interactive /project scene's normal behaviour.
    */
   interactive?: boolean;
 };
@@ -364,25 +386,36 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   // a new Set reference on every change, so this re-renders exactly when
   // something is hidden or shown.
   const hiddenElementIds = useProjectStore((state) => state.hiddenElementIds);
+  // Written from the DOM side (ElementPanel.tsx's color picker) and from
+  // RealtimeProvider.tsx (another reviewer's recolor arriving live); a
+  // new Map reference on every change, same reasoning as hiddenElementIds.
+  const elementColors = useProjectStore((state) => state.elementColors);
 
   // Every mesh gets its own material instance — material_1 is shared by
   // two meshes in the source file, and tweening a shared material's
   // emissive would light both of them up together on either one's hover.
-  // Not interactive: nothing ever animates emissive, so each entry maps
-  // straight to its source material — no clones to create or dispose.
-  const meshMaterials = useMemo(() => {
-    const result: Record<string, THREE.MeshStandardMaterial> = {};
+  // baseColors captures each clone's color *as cloned*, i.e. the model's
+  // original material color, before the color-override effect below ever
+  // mutates `.color` — that's what lets "no override" be restored to
+  // exactly instead of only ever moving forward from whatever the last
+  // override left behind. Not interactive: nothing ever animates emissive
+  // or overrides color, so each entry maps straight to its source
+  // material — no clones (and so no baseColors either) to create.
+  const { meshMaterials, baseColors } = useMemo(() => {
+    const materialsResult: Record<string, THREE.MeshStandardMaterial> = {};
+    const baseColorsResult: Record<string, THREE.Color> = {};
     for (const entry of MESH_ENTRIES) {
       if (!interactive) {
-        result[entry.id] = materials[entry.material];
+        materialsResult[entry.id] = materials[entry.material];
         continue;
       }
       const clone = materials[entry.material].clone();
       clone.emissive = new THREE.Color(BRASS);
       clone.emissiveIntensity = 0;
-      result[entry.id] = clone;
+      materialsResult[entry.id] = clone;
+      baseColorsResult[entry.id] = clone.color.clone();
     }
-    return result;
+    return { meshMaterials: materialsResult, baseColors: baseColorsResult };
   }, [materials, interactive]);
 
   const objectRefs = useRef<Record<string, THREE.Mesh | null>>({});
@@ -405,6 +438,28 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   useEffect(() => {
     invalidate();
   }, [hoveredElementId, selectedElementId, hiddenElementIds, invalidate]);
+
+  // Applies element color overrides — see the file header's own paragraph
+  // on this. A separate effect from the one above because this one also
+  // has real work to do beyond invalidating (mutating each mesh's cloned
+  // material), not just because of the interactive guard. Runs whenever
+  // elementColors changes (a local optimistic write, a realtime merge, or
+  // the initial hydrate() seeding it from the server) and also once on
+  // mount, so a project loaded with an override already set shows it
+  // immediately rather than only after the next change.
+  useEffect(() => {
+    if (!interactive) return;
+    for (const entry of MESH_ENTRIES) {
+      const material = meshMaterials[entry.id];
+      const override = elementColors.get(entry.id);
+      if (override) {
+        material.color.set(override);
+      } else {
+        material.color.copy(baseColors[entry.id]);
+      }
+    }
+    invalidate();
+  }, [interactive, meshMaterials, baseColors, elementColors, invalidate]);
 
   useEffect(() => {
     return () => {

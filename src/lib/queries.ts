@@ -17,25 +17,35 @@
  * "the read failed" (a thrown error), and decide what each means in its
  * own context: src/app/project/page.tsx catches a throw here to fall
  * back to the local seed data in src/data/project.ts; projectStore.ts
- * catches createAnnotation's throw to roll an optimistic pin back and
- * show a retry toast. Neither would be possible if failure and "empty"
- * looked the same.
+ * catches createAnnotation's/setColorOverride's/deleteColorOverride's
+ * throw to roll an optimistic write back and show a retry toast. Neither
+ * would be possible if failure and "empty" looked the same.
  *
- * mapAnnotation/mapReply and the Row types they consume are exported, not
- * private, for exactly one other caller: src/lib/realtime.ts maps the raw
- * rows a Postgres Changes payload carries through these same functions,
- * so a remote comment's arrival is shaped identically to one loaded by
- * getAnnotations above — one mapping implementation, not two that could
- * drift apart.
+ * mapAnnotation/mapReply/mapColorOverride and the Row types they consume
+ * are exported, not private, for exactly one other caller: src/lib/
+ * realtime.ts maps the raw rows a Postgres Changes payload carries
+ * through these same functions, so a remote comment's or color change's
+ * arrival is shaped identically to one loaded by getAnnotations/
+ * getColorOverrides above — one mapping implementation per table, not
+ * two that could drift apart.
  */
 import { supabase } from "@/lib/supabase";
 import type { Database } from "@/types/database";
-import type { Annotation, AnnotationReply, AnnotationStatus, Element, Project, Vec3 } from "@/types/project";
+import type {
+  Annotation,
+  AnnotationReply,
+  AnnotationStatus,
+  Element,
+  ElementColorOverride,
+  Project,
+  Vec3,
+} from "@/types/project";
 
 type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
 type ElementRow = Database["public"]["Tables"]["elements"]["Row"];
 export type AnnotationRow = Database["public"]["Tables"]["annotations"]["Row"];
 export type AnnotationReplyRow = Database["public"]["Tables"]["annotation_replies"]["Row"];
+export type ElementColorOverrideRow = Database["public"]["Tables"]["element_color_overrides"]["Row"];
 
 // Every exported function starts with this — one place that turns "not
 // configured" into a thrown error instead of every call site null-
@@ -92,6 +102,10 @@ export function mapAnnotation(row: AnnotationRow, replies: AnnotationReply[]): A
     status: row.status as AnnotationStatus,
     replies,
   };
+}
+
+export function mapColorOverride(row: ElementColorOverrideRow): ElementColorOverride {
+  return { elementId: row.element_id, color: row.color };
 }
 
 /**
@@ -168,6 +182,23 @@ export async function getAnnotations(projectId: string): Promise<Annotation[]> {
   return annotationRows.map((row) => mapAnnotation(row, repliesByAnnotation.get(row.id) ?? []));
 }
 
+/**
+ * Every color override currently set on a project's elements — no row
+ * for a given element means "use the model's original material color"
+ * (see ElementColorOverride's own comment in src/types/project.ts).
+ * Called by src/app/project/page.tsx's server-side initial load,
+ * alongside getElements/getAnnotations, so a color a previous reviewer
+ * already applied is showing on first paint, not only after a live
+ * update arrives for whoever's looking right now. An empty result
+ * (nothing recolored yet) is `[]`, not an error.
+ */
+export async function getColorOverrides(projectId: string): Promise<ElementColorOverride[]> {
+  const client = requireSupabase();
+  const { data, error } = await client.from("element_color_overrides").select("*").eq("project_id", projectId);
+  if (error) throw new Error(`getColorOverrides: ${error.message}`);
+  return (data ?? []).map(mapColorOverride);
+}
+
 export interface NewAnnotationInput {
   /** Client-generated (crypto.randomUUID()), sent explicitly rather than
    *  left to the database's own default — see projectStore.ts's
@@ -242,4 +273,59 @@ export async function createReply(annotationId: string, author: string, body: st
     .single();
   if (error) throw new Error(`createReply: ${error.message}`);
   return mapReply(data);
+}
+
+export interface SetColorOverrideInput {
+  projectId: string;
+  /** Element.id, not meshName — see ElementColorOverride's own comment
+   *  in src/types/project.ts for why the two differ here. */
+  elementId: string;
+  color: string;
+}
+
+/**
+ * Sets (or replaces) an element's color override — a single upsert keyed
+ * on the table's own unique(element_id) constraint (see
+ * supabase/migrations/20260916000000_element_color_overrides.sql), so
+ * the first recolor of an element inserts a row and every later recolor
+ * updates that same row rather than creating a second one. `updated_at`
+ * is stamped explicitly on every call, not left to the column's own
+ * `default now()` — that default only ever fires on insert, and an
+ * update through an upsert needs the timestamp set the same way a plain
+ * update would. Called by projectStore.ts's setElementColor, after the
+ * same color has already been applied to local state optimistically —
+ * this is the "persist" half, not the half that recolors the mesh.
+ */
+export async function setColorOverride(input: SetColorOverrideInput): Promise<ElementColorOverride> {
+  const client = requireSupabase();
+  const { data, error } = await client
+    .from("element_color_overrides")
+    .upsert(
+      {
+        project_id: input.projectId,
+        element_id: input.elementId,
+        color: input.color,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "element_id" },
+    )
+    .select("*")
+    .single();
+  if (error) throw new Error(`setColorOverride: ${error.message}`);
+  return mapColorOverride(data);
+}
+
+/**
+ * Removes an element's color override — "reset to original." There is
+ * no update-to-null path: color is not-null and check-constrained to a
+ * real hex value at the database layer (see the migration referenced
+ * above), so a missing row, never a null/sentinel column, is the only
+ * way "original" is ever expressed. Called by projectStore.ts's
+ * clearElementColor, after the override has already been removed from
+ * local state optimistically.
+ */
+export async function deleteColorOverride(elementId: string): Promise<void> {
+  const client = requireSupabase();
+  const { error } = await client.from("element_color_overrides").delete().eq("element_id", elementId);
+  if (error) throw new Error(`deleteColorOverride: ${error.message}`);
 }

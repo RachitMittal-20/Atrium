@@ -47,6 +47,21 @@
  *    pressing "C" — see ModeIndicator.tsx and BuildingModel.tsx for the
  *    rest of that flow.
  *
+ * The Color section (above Specification) is this panel's write path for
+ * projectStore's elementColors: SWATCH_COLORS gives a fixed set of chips
+ * to click, plus a native `<input type="color">` for anything else, both
+ * calling setElementColor(element.meshName, color) — an optimistic write
+ * that persists to Supabase and syncs live to other reviewers (see that
+ * action's own comment in projectStore.ts). "Reset to original" only
+ * renders once an override actually exists, and calls clearElementColor
+ * to remove it — the database has no "original color" value to set back
+ * to (see supabase/migrations/20260916000000_element_color_overrides.sql
+ * on why absence, not a value, is what "original" means), so this is a
+ * delete, not an update to some default. This is the one write this
+ * panel makes into truly persisted, cross-reviewer state; Hide/Show above
+ * (hiddenElementIds) is deliberately local-only — see that state's own
+ * comment in projectStore.ts for why the two differ.
+ *
  * History is a collapsed-by-default affordance (plain local useState,
  * reset for free on every element switch since this component fully
  * remounts per element — AnimatePresence keys it by element.id) listing
@@ -87,11 +102,34 @@ const STATUS_DOT_COLOR: Record<ElementStatus, string> = {
   Revised: "bg-muted",
 };
 
+// A fixed set of recolor swatches — this panel's own concern, not a
+// design token (see src/app/globals.css's own header on what belongs
+// there vs. here): these are FF&E recolor *options* a reviewer picks
+// from, not interface accents. The first three reuse the app's existing
+// accent palette exactly (brass/verdigris/clay from globals.css) so a
+// recolored element still reads as "this app's colors," not an arbitrary
+// swatch; the rest round it out with a few plausible architectural
+// material tones (a warm neutral, a deep charcoal, a walnut, a muted
+// forest green) within the same restrained, desaturated register the
+// rest of ATRIUM's palette already keeps to.
+const SWATCH_COLORS: { hex: string; name: string }[] = [
+  { hex: "#D4A24C", name: "Brass" },
+  { hex: "#8DAE84", name: "Verdigris" },
+  { hex: "#C97B52", name: "Clay" },
+  { hex: "#E9E5DC", name: "Vellum" },
+  { hex: "#8B9099", name: "Warm Grey" },
+  { hex: "#262A30", name: "Charcoal" },
+  { hex: "#5E3A28", name: "Walnut" },
+  { hex: "#2F4A3D", name: "Forest" },
+];
+
 export function ElementPanel() {
   const selectedElementId = useProjectStore((state) => state.selectedElementId);
   const elements = useProjectStore((state) => state.elements);
   const clearSelected = useProjectStore((state) => state.clearSelected);
   const toggleElementVisibility = useProjectStore((state) => state.toggleElementVisibility);
+  const setElementColor = useProjectStore((state) => state.setElementColor);
+  const clearElementColor = useProjectStore((state) => state.clearElementColor);
 
   const element = useMemo(
     () => elements.find((candidate) => candidate.meshName === selectedElementId) ?? null,
@@ -103,6 +141,14 @@ export function ElementPanel() {
   // as the useShallow thread selector just below.
   const isHidden = useProjectStore((state) =>
     element ? state.hiddenElementIds.has(element.meshName) : false,
+  );
+  // Same targeted-selector reasoning as isHidden just above: only this
+  // element's own color entry, never the whole elementColors Map —
+  // another reviewer recoloring an unrelated element shouldn't re-render
+  // this panel. undefined means "no override," i.e. the model's original
+  // material color — see projectStore.ts's elementColors comment.
+  const elementColor = useProjectStore((state) =>
+    element ? state.elementColors.get(element.meshName) : undefined,
   );
   // useShallow, not a plain selector + useMemo: subscribing to the whole
   // `annotations` array (as this used to) re-renders this panel on *every*
@@ -236,6 +282,52 @@ export function ElementPanel() {
                   hidden in the model, not deselected (see file header). */}
               {isHidden && (
                 <p className="mt-2 font-mono text-3xs uppercase tracking-[0.18em] text-faint">Hidden in model</p>
+              )}
+
+              <Rule className="my-5" label="Color" />
+              <div className="flex flex-wrap items-center gap-2">
+                {SWATCH_COLORS.map((swatch) => (
+                  <button
+                    key={swatch.hex}
+                    type="button"
+                    aria-label={`Set color to ${swatch.name}`}
+                    aria-pressed={elementColor?.toLowerCase() === swatch.hex.toLowerCase()}
+                    onClick={() => void setElementColor(element.meshName, swatch.hex)}
+                    style={{ backgroundColor: swatch.hex }}
+                    className={`h-6 w-6 rounded-full border transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
+                      elementColor?.toLowerCase() === swatch.hex.toLowerCase()
+                        ? "scale-110 border-ink"
+                        : "border-rule hover:scale-105"
+                    }`}
+                  />
+                ))}
+                {/* A native color input, not a custom picker — this is a
+                    hackathon-scale reviewer tool, and the browser's own
+                    picker already covers "none of the swatches match"
+                    without a component this app would otherwise have to
+                    build and maintain. Cropped to a circle via overflow-
+                    hidden on the wrapping label so it still reads as one
+                    more swatch, not a stray native control. */}
+                <label
+                  aria-label="Choose a custom color"
+                  className="relative h-6 w-6 cursor-pointer overflow-hidden rounded-full border border-rule transition-transform hover:scale-105"
+                >
+                  <input
+                    type="color"
+                    value={elementColor ?? "#000000"}
+                    onChange={(event) => void setElementColor(element.meshName, event.target.value)}
+                    className="absolute -left-1 -top-1 h-8 w-8 cursor-pointer border-none p-0"
+                  />
+                </label>
+              </div>
+              {elementColor && (
+                <button
+                  type="button"
+                  onClick={() => void clearElementColor(element.meshName)}
+                  className="mt-2 font-mono text-3xs uppercase tracking-[0.18em] text-faint transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
+                >
+                  Reset to original
+                </button>
               )}
 
               <Rule className="my-5" label="Specification" />

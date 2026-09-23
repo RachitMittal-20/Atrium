@@ -9,6 +9,18 @@
  * and verified: `supabase db reset` to apply supabase/migrations/ and
  * supabase/seed.sql fresh, then re-run the gen types command above.
  *
+ * The `element_color_overrides` entry was added by hand, alongside
+ * 20260916000000_element_color_overrides.sql, in an environment with no
+ * local Supabase stack to run the real generator against — hand-typed to
+ * match that migration's columns/constraints exactly (including
+ * `isOneToOne: true` on its element_id relationship, which the generator
+ * emits specifically because that column carries a unique constraint,
+ * the same as every other Relationships entry below it). Treat this one
+ * entry as unverified against the real CLI output until someone with a
+ * local stack runs the regenerate command above and confirms it matches
+ * byte-for-byte — everything else in this file is still the genuine
+ * generated output.
+ *
  * src/lib/supabase.ts is the only place this file is imported.
  */
 
@@ -136,6 +148,45 @@ export type Database = {
           },
           {
             foreignKeyName: "annotations_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      element_color_overrides: {
+        Row: {
+          color: string
+          element_id: string
+          id: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          color: string
+          element_id: string
+          id?: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          color?: string
+          element_id?: string
+          id?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "element_color_overrides_element_id_fkey"
+            columns: ["element_id"]
+            isOneToOne: true
+            referencedRelation: "elements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "element_color_overrides_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"

@@ -50,7 +50,7 @@ import { Toast } from "@/components/ui/Toast";
 import { RemoteCommentToast } from "@/components/ui/RemoteCommentToast";
 import { ProjectHydrator } from "@/components/ProjectHydrator";
 import { RealtimeProvider } from "@/components/RealtimeProvider";
-import { getProject, getElements, getAnnotations } from "@/lib/queries";
+import { getProject, getElements, getAnnotations, getColorOverrides } from "@/lib/queries";
 import { PROJECT, ELEMENTS, ANNOTATIONS } from "@/data/project";
 import type { HydrationData } from "@/store/projectStore";
 
@@ -67,8 +67,12 @@ async function loadInitialData(): Promise<HydrationData> {
     if (!project) {
       throw new Error("Supabase returned no project row — has the seed migration been applied?");
     }
-    const [elements, annotations] = await Promise.all([getElements(project.id), getAnnotations(project.id)]);
-    return { project, elements, annotations, isDemoData: false };
+    const [elements, annotations, colorOverrides] = await Promise.all([
+      getElements(project.id),
+      getAnnotations(project.id),
+      getColorOverrides(project.id),
+    ]);
+    return { project, elements, annotations, colorOverrides, isDemoData: false };
   } catch (error) {
     // Deliberately broad: missing env vars, an unreachable project, an
     // RLS/policy error, an empty table — every one of them lands here,
@@ -76,7 +80,10 @@ async function loadInitialData(): Promise<HydrationData> {
     // local demo data instead of a blank or half-broken page.
     const message = error instanceof Error ? error.message : String(error);
     console.error("[project] Falling back to local demo data:", message);
-    return { project: PROJECT, elements: ELEMENTS, annotations: ANNOTATIONS, isDemoData: true };
+    // colorOverrides: [] — the local demo data has no equivalent seed
+    // constant (see HydrationData's own comment on why); demo mode always
+    // starts with nothing recolored.
+    return { project: PROJECT, elements: ELEMENTS, annotations: ANNOTATIONS, colorOverrides: [], isDemoData: true };
   }
 }
 
