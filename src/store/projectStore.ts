@@ -50,17 +50,52 @@
  * single bottom sheet (SPEC/COMMENTS tabs) rather than stacking two —
  * see ReviewList.tsx's file header for the full mobile layout rationale.
  *
- * `cameraMode` is the ORBIT/WALKTHROUGH/PANORAMA toggle
+ * `cameraMode` is the ORBIT/WALKTHROUGH/PANORAMA/TOUR toggle
  * CameraModeToggle.tsx displays and drives — orthogonal to `mode` above
  * (review/pin is about what a click *does*; cameraMode is about how the
  * camera itself moves), so the two combine freely: pinning a comment
  * while walking through or looking around in panorama works exactly like
  * pinning one while orbiting. Scene.tsx reads this to decide which
- * controls (OrbitControls, WalkthroughControls or PanoramaControls) are
- * driving the camera this frame; nothing about annotations, review mode,
- * or realtime sync reads it at all. Nothing branches on it exhaustively
- * either — every reader asks "is it orbit?" or "is it <one mode>?" —
- * so adding a mode needs no store changes beyond the union below.
+ * controls (OrbitControls, WalkthroughControls, PanoramaControls or
+ * TourControls) are driving the camera this frame; nothing about
+ * annotations, review mode, or realtime sync reads it at all. Nothing
+ * branches on it exhaustively either — every reader asks "is it orbit?"
+ * or "is it <one mode>?" — so adding a mode needs no store changes
+ * beyond the union below (tour needed two more fields regardless —
+ * tourIndex and its actions — but that's tour-specific state, not
+ * cameraMode plumbing).
+ *
+ * `tourIndex`/tourNext/tourPrev/tourGoTo are TOUR mode's own state: which
+ * position in `elements` — in whatever order that array currently holds,
+ * never re-sorted or grouped by this store — the guided walkthrough is
+ * currently framing. TourControls.tsx (inside the Canvas) reads
+ * tourIndex to know which element to ease the camera onto and calls
+ * tourNext/tourPrev from wheel/swipe input; TourHud.tsx (outside it)
+ * reads the same index for its progress readout and calls the same
+ * three actions from its Prev/Next buttons — one source of truth for
+ * "which element" on both sides of the Canvas boundary, the same
+ * pattern every other piece of cross-boundary state in this store
+ * already follows. Clamped at both ends, not wrapped: tourNext/tourPrev
+ * stop at the first/last element rather than cycling past it, so
+ * TourHud's buttons can disable at the boundary (a wrapping tour reads
+ * as "did that button just do nothing?" the moment it silently loops).
+ * Scene.tsx's Model() resets this to 0 itself, in the same
+ * pose-ownership effect described below, every time cameraMode *enters*
+ * tour from anything else — so re-entering tour always restarts the walk
+ * from the beginning, a deliberate demo-friendliness choice (a presenter
+ * re-clicking Tour mid-demo gets a predictable fresh run, not wherever
+ * the tour happened to be left).
+ *
+ * A note on ordering, since it matters for what tour actually shows:
+ * `elements` is whatever hydrate() last set it to (see below) — for the
+ * local demo data that's src/data/project.ts's ELEMENTS constant, in its
+ * curated, architecturally-grouped array order (envelope, architecture,
+ * kitchen, furniture, lighting, fixtures); for a live Supabase project
+ * it's src/lib/queries.ts's getElements() result, which orders by
+ * `name` alphabetically instead. Tour never reorders or groups either
+ * one itself — "step through `elements` in whatever order it's already
+ * in" is the entire ordering logic — so which experience a demo actually
+ * gets depends on which data source is loaded at the time.
  *
  * `hiddenElementIds` is element visibility: the meshNames currently
  * hidden from the 3D scene. Unlike the viewport bridge above this *is*
@@ -149,8 +184,11 @@ interface ViewportBridge {
 export type ProjectMode = "review" | "pin";
 export type MobileTab = "spec" | "comments";
 /** "panorama" = fixed-point look-around, no translation — see
- *  src/components/three/PanoramaControls.tsx. */
-export type CameraMode = "orbit" | "walkthrough" | "panorama";
+ *  src/components/three/PanoramaControls.tsx. "tour" = an automatic
+ *  guided walkthrough that eases through `elements` one at a time — see
+ *  src/components/three/TourControls.tsx and this file's own header for
+ *  tourIndex and its actions. */
+export type CameraMode = "orbit" | "walkthrough" | "panorama" | "tour";
 
 export interface PendingPin {
   position: Vec3;
@@ -319,9 +357,25 @@ interface ProjectState {
   mobileTab: MobileTab;
   setMobileTab: (tab: MobileTab) => void;
 
-  // --- Camera mode: orbit / walkthrough / panorama (see file header) ---
+  // --- Camera mode: orbit / walkthrough / panorama / tour (see file header) ---
   cameraMode: CameraMode;
   setCameraMode: (mode: CameraMode) => void;
+
+  // --- Tour mode: position in `elements` (see file header) ---
+  tourIndex: number;
+  /** Advances one element, clamped at `elements.length - 1` — a no-op
+   *  once already there (see TourHud.tsx, which disables its Next
+   *  button at exactly this boundary rather than relying on this being
+   *  silently harmless, though it is). */
+  tourNext: () => void;
+  /** Steps back one element, clamped at 0 — same shape as tourNext. */
+  tourPrev: () => void;
+  /** Jumps straight to an index, clamped into range. Scene.tsx's Model()
+   *  calls this with 0 on every orbit/walkthrough/panorama -> tour
+   *  transition; nothing else calls it with anything but 0 today, but
+   *  it's the general primitive tourNext/tourPrev are both built from
+   *  rather than three independent clamping implementations. */
+  tourGoTo: (index: number) => void;
 
   // --- Selectors ---
   /** The Element whose meshName matches a BuildingModel mesh id, if any. */
@@ -682,6 +736,22 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     cameraMode: "orbit",
     setCameraMode: (cameraMode) => set({ cameraMode }),
+
+    // Tour mode. Clamped against get().elements.length — the *live*
+    // array, not a snapshot taken when tour mode was entered — so if
+    // elements ever changed size mid-tour (not something this app's UI
+    // can currently trigger, but nothing here assumes it can't) the
+    // clamp always reflects reality rather than a stale bound.
+    tourIndex: 0,
+    tourGoTo: (index) =>
+      set((state) => ({
+        tourIndex: Math.max(0, Math.min(index, Math.max(state.elements.length - 1, 0))),
+      })),
+    tourNext: () =>
+      set((state) => ({
+        tourIndex: Math.min(state.tourIndex + 1, Math.max(state.elements.length - 1, 0)),
+      })),
+    tourPrev: () => set((state) => ({ tourIndex: Math.max(state.tourIndex - 1, 0) })),
 
     getElementByMeshId: (meshId) => get().elements.find((element) => element.meshName === meshId),
     getAnnotationsForElement: (elementId) =>

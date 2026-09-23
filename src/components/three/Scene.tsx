@@ -75,32 +75,42 @@
  * constants can be stated in real metres instead of an arbitrary ratio.
  *
  * Camera mode: projectStore's cameraMode ("orbit" | "walkthrough" |
- * "panorama", driven by CameraModeToggle.tsx) decides which of three
- * mutually-exclusive controls drives the camera each frame —
+ * "panorama" | "tour", driven by CameraModeToggle.tsx) decides which of
+ * four mutually-exclusive controls drives the camera each frame —
  * OrbitControls (unchanged from before this existed), WalkthroughControls
  * (see its own file for why it's a fully separate component rather than a
- * mode branch bolted onto OrbitControls), or PanoramaControls (a
+ * mode branch bolted onto OrbitControls), PanoramaControls (a
  * stripped-down sibling of WalkthroughControls: look-around only, the
- * camera never translates). OrbitControls itself is never unmounted for
- * either of the other two — only `enabled` toggles, and it's `=== "orbit"`
- * so both non-orbit modes disable it (and SmoothZoom) without listing
- * them — so its target/pan state survives a round trip through either
- * mode; see WalkthroughControls.tsx's header for why that matters.
+ * camera never translates), or TourControls (an automatic guided
+ * walkthrough — see its own file header for how it steps through
+ * elements and why it needs no free-look of its own). OrbitControls
+ * itself is never unmounted for any of the other three — only `enabled`
+ * toggles, and it's `=== "orbit"` so every non-orbit mode disables it
+ * (and SmoothZoom) without listing them — so its target/pan state
+ * survives a round trip through any of them; see WalkthroughControls.tsx's
+ * header for why that matters.
  *
  * The orbit camera pose itself is saved and restored here, in Model(),
- * not by the walkthrough/panorama controllers: saved the moment
- * cameraMode *leaves* "orbit", restored the moment it *returns*, and
- * never touched on a switch between the two non-orbit modes. Each
- * non-orbit controller just starts from the camera's live pose on mount.
- * Why not per-controller save/restore (as it used to be): React runs a
- * departing component's effect cleanup *before* the arriving one's mount
- * effect, so walkthrough's "restore the orbit pose on unmount" always
- * fired first, and panorama then "started from where the camera was"
- * — which was the orbit pose, never walkthrough's eye position. And
- * panorama restoring *its* start pose on unmount would, in turn, have
- * handed a walkthrough eye pose back to orbit. Only something that
- * outlives both controllers, and knows which mode is orbit, can get every
- * transition right; see the orbit-pose layout effect in Model() below.
+ * not by any non-orbit controller: saved the moment cameraMode *leaves*
+ * "orbit", restored the moment it *returns*, and never touched on a
+ * switch between two non-orbit modes. Each non-orbit controller just
+ * starts from the camera's live pose on mount (TourControls goes one
+ * step further and immediately eases away from that live pose onto its
+ * first element — see its own file — but it still starts *from*
+ * wherever the camera actually was, same as the other two). Why not
+ * per-controller save/restore (as it used to be, before panorama and
+ * tour both existed): React runs a departing component's effect cleanup
+ * *before* the arriving one's mount effect, so walkthrough's "restore
+ * the orbit pose on unmount" always fired first, and panorama then
+ * "started from where the camera was" — which was the orbit pose, never
+ * walkthrough's eye position. And panorama restoring *its* start pose on
+ * unmount would, in turn, have handed a walkthrough eye pose back to
+ * orbit. Only something that outlives every controller, and knows which
+ * mode is orbit, can get every transition right regardless of how many
+ * non-orbit modes exist; see the orbit-pose layout effect in Model()
+ * below — the same effect tour's own tourIndex reset piggybacks on,
+ * for the identical reason (it needs to run before TourControls' own
+ * mount effect eases the camera anywhere).
  *
  * frameloop stays "demand" in every camera mode, including walkthrough —
  * it briefly switched to "always" while that mode was active, on the
@@ -131,6 +141,7 @@ import { BuildingModel } from "@/components/three/BuildingModel";
 import { SmoothZoom } from "@/components/three/SmoothZoom";
 import { WalkthroughControls } from "@/components/three/WalkthroughControls";
 import { PanoramaControls } from "@/components/three/PanoramaControls";
+import { TourControls } from "@/components/three/TourControls";
 import { HDRI_STUDIO_PATH } from "@/lib/assets";
 import { useScrollStore } from "@/store/scrollStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -325,9 +336,25 @@ function Model() {
       orbitPoseRef.current = null;
       invalidate();
     }
-    // walkthrough ↔ panorama: deliberately nothing. The arriving
-    // controller picks up the camera's live pose as it is, and the saved
-    // orbit pose stays put for whenever orbit comes back.
+    // walkthrough/panorama/tour <-> each other: deliberately nothing
+    // pose-related here. The arriving controller picks up the camera's
+    // live pose as it is, and the saved orbit pose stays put for
+    // whenever orbit comes back.
+    //
+    // Tour is the one addition beyond pose ownership: entering it from
+    // *any* other mode resets tourIndex to 0, so every fresh "Tour"
+    // click restarts the walk from the beginning rather than resuming
+    // wherever a previous tour left off (see projectStore.ts's own
+    // comment on why that's the deliberate choice for a demo feature).
+    // This has to live in this same layout effect, not a plain effect
+    // inside TourControls itself, for the same before-any-mount-effect
+    // ordering reason the pose logic above does: TourControls' own
+    // mount effect reads tourIndex on its very first run to ease the
+    // camera onto an element, and that read has to see 0, not whatever
+    // tourIndex was left at from a previous tour.
+    if (cameraMode === "tour" && previous !== "tour") {
+      useProjectStore.getState().tourGoTo(0);
+    }
   }, [cameraMode, camera, invalidate]);
   /* eslint-enable react-hooks/immutability */
 
@@ -462,6 +489,16 @@ function Model() {
           and so its saved pose is the real framed view, not the default
           camera. */}
       {extent && cameraMode === "panorama" && <PanoramaControls />}
+
+      {/* Same disable-don't-unmount arrangement as walkthrough/panorama
+          above. Unlike either of them, TourControls actively moves the
+          camera (easing onto each element in turn) rather than just
+          reading input — see its own file header — but it's still just
+          as reliant on OrbitControls being disabled-not-unmounted and
+          on Model()'s pose-ownership effect (above) having already run
+          this same commit, before this component's own mount effect
+          reads tourIndex. */}
+      {extent && cameraMode === "tour" && <TourControls />}
     </>
   );
 }

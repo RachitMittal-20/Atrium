@@ -35,6 +35,13 @@
  *   - Panorama: PanoramaControls.tsx's own left-button drag handler and
  *     ROTATE_LEFT_KEYS/ROTATE_RIGHT_KEYS (Q/E) — its only two inputs,
  *     since that mode never moves the camera, only turns it.
+ *   - Tour: TourControls.tsx's own wheel and vertical-swipe listeners,
+ *     plus TourHud.tsx's Prev/Next buttons (a third input method, listed
+ *     here as "Buttons" since "click the on-screen Prev/Next" is what a
+ *     visitor actually does, not a camera gesture the way the other rows
+ *     are). No drag-to-look row for this mode, deliberately — tour never
+ *     reads mouse-drag at all, by design (see TourControls.tsx's own
+ *     header).
  *
  * Auto-opens once per browser tab (sessionStorage, not localStorage —
  * "once per session" is exactly what sessionStorage already means, and a
@@ -162,6 +169,20 @@ export function ControlsHelp() {
                 <div className="flex justify-between gap-3 text-2xs">
                   <dt className="text-faint">Q / E</dt>
                   <dd className="text-ink">Rotate view</dd>
+                </div>
+              </dl>
+            </div>
+
+            <div>
+              <p className="font-mono text-3xs uppercase tracking-[0.18em] text-faint">Tour</p>
+              <dl className="mt-1.5 space-y-1">
+                <div className="flex justify-between gap-3 text-2xs">
+                  <dt className="text-faint">Scroll / swipe</dt>
+                  <dd className="text-ink">Step</dd>
+                </div>
+                <div className="flex justify-between gap-3 text-2xs">
+                  <dt className="text-faint">Buttons</dt>
+                  <dd className="text-ink">Prev / Next</dd>
                 </div>
               </dl>
             </div>

@@ -1,12 +1,12 @@
 /**
  * src/components/ui/CameraModeToggle.tsx
  *
- * The ORBIT/WALKTHROUGH/PANORAMA segmented control — drives
+ * The ORBIT/WALKTHROUGH/PANORAMA/TOUR segmented control — drives
  * projectStore's cameraMode, which src/components/three/Scene.tsx reads
- * to decide whether OrbitControls, WalkthroughControls or
- * PanoramaControls is driving the camera this frame (see that file's
- * header). Options render straight from OPTIONS below, so a third mode
- * is just a third entry, with the same styling as the others. Visually a smaller sibling of
+ * to decide whether OrbitControls, WalkthroughControls, PanoramaControls
+ * or TourControls is driving the camera this frame (see that file's
+ * header). Options render straight from OPTIONS below, so a fourth mode
+ * is just a fourth entry, with the same styling as the others. Visually a smaller sibling of
  * ReviewList.tsx's ALL/OPEN/RESOLVED filter (same border/mono/active-
  * brass pattern), stacked directly below PresenceIndicator — right-6/
  * right-10, matching ModeIndicator and PresenceIndicator's own alignment
@@ -26,6 +26,7 @@ const OPTIONS: { value: CameraMode; label: string }[] = [
   { value: "orbit", label: "Orbit" },
   { value: "walkthrough", label: "Walkthrough" },
   { value: "panorama", label: "Panorama" },
+  { value: "tour", label: "Tour" },
 ];
 
 export function CameraModeToggle() {
