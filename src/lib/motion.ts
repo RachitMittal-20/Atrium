@@ -25,7 +25,8 @@
  *    arbitrary *mesh* rather than an annotation — TourControls.tsx's one
  *    caller. See that function's own comment for why it can't just reuse
  *    annotationCameraTarget (no stored normal to read) and for the
- *    reasoning behind its distance formula's constants.
+ *    reasoning behind its distance formula's and view-direction's
+ *    constants.
  * Real, differently-motivated callers computing their own inputs but
  * sharing identical tween mechanics is exactly what earns these their own
  * functions rather than staying copy-pasted.
@@ -154,52 +155,140 @@ const ELEMENT_MIN_DISTANCE_FLOOR_RATIO = 3;
 // "zoomed into this one thing."
 const ELEMENT_MAX_DISTANCE_CAP_RATIO = 0.3;
 
-// A fixed, elevated 3/4 angle to shoot every framed element from.
-// annotationCameraTarget above reads a *stored* normal off its target
-// object to know which way to face — mesh elements have no such thing
-// (there's no "correct side" to view a sofa from the way there's a
-// correct side to face a wall a comment is pinned to), so this is simply
-// a generally flattering angle for an arbitrary object, the kind an
-// architectural photograph would use by default.
-const ELEMENT_VIEW_DIRECTION = new THREE.Vector3(1, 0.6, 1).normalize();
-
 // How far above the *whole model's* own highest point the camera is
 // still allowed to rise, as a fraction of the model's own total height —
 // see elementCameraTarget's own comment for the bug this specifically
 // fixes, confirmed by measurement (a Playwright trace of every tour step
 // against the real model), not guessed: for a large structural/envelope
-// element, sphere.radius alone can be a
-// sizeable fraction of the *whole model's* own radius, which pushes
-// `distance` up near ELEMENT_MAX_DISTANCE_CAP_RATIO's cap — and because
-// ELEMENT_VIEW_DIRECTION's y-component is fixed, that large distance
-// multiplies straight through into an equally large vertical offset,
-// regardless of how tall the element or the model actually is. Measured
-// on the curated model: framing "building-shell-lower" (own top at
-// y≈1557, in a model whose own overall top is y≈1897) put the camera at
-// y≈4075 — more than double the *entire model's* own tallest point, a
-// bird's-eye shot looking straight down at the roof instead of a normal
-// elevated 3/4 exterior view. 0.15 keeps the camera's ceiling at 15% of
-// the model's own height above its actual top — generous enough that a
-// genuinely tall element (the full-height envelope) still reads as
-// "elevated," nowhere near enough to end up floating above the roof.
+// element, sphere.radius alone can be a sizeable fraction of the *whole
+// model's* own radius, which pushes `distance` up near
+// ELEMENT_MAX_DISTANCE_CAP_RATIO's cap — and because the view direction's
+// y-component was, until this was measured and fixed, a *fixed* ratio,
+// that large distance multiplied straight through into an equally large
+// vertical offset, regardless of how tall the element or the model
+// actually is. Measured on the curated model: framing
+// "building-shell-lower" (own top at y≈1557, in a model whose own overall
+// top is y≈1897) put the camera at y≈4075 — more than double the *entire
+// model's* own tallest point, a bird's-eye shot looking straight down at
+// the roof instead of a normal elevated 3/4 exterior view. 0.15 keeps the
+// camera's ceiling at 15% of the model's own height above its actual top
+// — generous enough that a genuinely tall element (the full-height
+// envelope) still reads as "elevated," nowhere near enough to end up
+// floating above the roof.
 const ELEMENT_MAX_CEILING_RATIO = 0.15;
+
+// The view direction's elevation (Y) component, held fixed regardless of
+// which horizontal bearing elementViewBearing below picks — see that
+// function's own comment for why the *horizontal* half of the direction
+// is element-aware but the *vertical* half deliberately isn't. This is
+// the exact Y value the direction used before it became element-aware
+// (the old ELEMENT_VIEW_DIRECTION = (1, 0.6, 1)), so every element keeps
+// the same "elevated 3/4" pitch it always had — only its compass bearing
+// changes.
+const ELEMENT_VIEW_ELEVATION = 0.6;
+
+// The horizontal (XZ) bearing the *original*, pre-element-aware direction
+// used — (1, 1) normalized, the XZ projection of (1, 0.6, 1). Furniture
+// and anything else near the model's own horizontal centre (see
+// elementViewBearing) still gets framed from exactly this bearing,
+// unchanged — this constant is what keeps that framing identical to
+// before rather than element-awareness silently redirecting every shot.
+const ELEMENT_VIEW_FALLBACK_BEARING = new THREE.Vector2(1, 1).normalize();
+
+/**
+ * The horizontal (XZ) half of elementCameraTarget's view direction —
+ * split into its own function because it's the one part of the direction
+ * that needs to know anything about the element's *position*, not just
+ * its size. The vertical half (ELEVATION_ratio above) never changes: only
+ * the compass bearing does.
+ *
+ * The bug this fixes (found the same way as the ceiling clamp above — by
+ * screenshotting real tour steps, not guessing): a single fixed bearing
+ * for every element frequently put the camera on the *outside* of a
+ * perimeter wall, window, or door, looking back in at its exterior face,
+ * because the bearing never accounted for which side of the building the
+ * element was actually on.
+ *
+ * The fix: compare the element's own horizontal centre to the *model's*
+ * own horizontal centre (modelBounds — the same whole-model box the
+ * ceiling clamp above already needs). The vector from the model's centre
+ * out to the element points roughly "outward," toward whichever side of
+ * the building that element sits on; negating it gives "inward" — the
+ * side the camera should stand on so it's looking at the element from
+ * inside the envelope, the same side a reviewer would actually be
+ * standing on to look at that wall or window in the real apartment.
+ *
+ * Blended with ELEMENT_VIEW_FALLBACK_BEARING, not used outright, by how
+ * far the element's centre actually sits from the model's own centre
+ * (`proximity`, 0 at dead centre, 1 at or beyond the model's own
+ * horizontal half-diagonal): an element right at the model's own centre
+ * has a near-zero, directionless "outward" vector — there's no
+ * meaningful "which side of the building" answer for it, the same reason
+ * "inside vs outside" isn't meaningful for the building shell itself
+ * (whose own horizontal centre, being the outer envelope, naturally
+ * coincides with the model's — this formula already produces
+ * `proximity ≈ 0` for it without any separate special case, falling back
+ * to the same fixed bearing that already framed it correctly, verified
+ * by screenshot). Perimeter elements (proximity near 1) get the computed
+ * inward bearing almost outright; everything between blends smoothly.
+ */
+function elementViewBearing(target: THREE.Vector3, modelBounds: THREE.Box3): THREE.Vector2 {
+  const modelCenterX = (modelBounds.min.x + modelBounds.max.x) / 2;
+  const modelCenterZ = (modelBounds.min.z + modelBounds.max.z) / 2;
+  const outwardX = target.x - modelCenterX;
+  const outwardZ = target.z - modelCenterZ;
+  const outwardLength = Math.hypot(outwardX, outwardZ);
+
+  const modelHalfWidth = (modelBounds.max.x - modelBounds.min.x) / 2;
+  const modelHalfDepth = (modelBounds.max.z - modelBounds.min.z) / 2;
+  const modelHorizontalRadius = Math.hypot(modelHalfWidth, modelHalfDepth);
+
+  // Degenerate cases (an element dead-centre, or a degenerate/zero-size
+  // model bounds) fall straight back to the fixed bearing — there's no
+  // "inward" to compute from a zero-length "outward."
+  if (outwardLength < 1e-6 || modelHorizontalRadius < 1e-6) {
+    return ELEMENT_VIEW_FALLBACK_BEARING.clone();
+  }
+
+  const inwardX = -outwardX / outwardLength;
+  const inwardZ = -outwardZ / outwardLength;
+  const proximity = THREE.MathUtils.clamp(outwardLength / modelHorizontalRadius, 0, 1);
+
+  const blendedX = THREE.MathUtils.lerp(ELEMENT_VIEW_FALLBACK_BEARING.x, inwardX, proximity);
+  const blendedZ = THREE.MathUtils.lerp(ELEMENT_VIEW_FALLBACK_BEARING.y, inwardZ, proximity);
+  const blendedLength = Math.hypot(blendedX, blendedZ);
+
+  // The blend can only cancel out near-completely if "inward" happens to
+  // point almost exactly opposite the fallback bearing *and* proximity
+  // lands close to the one ratio where the two half-cancel — rare, but
+  // not impossible. "Inward" is the more meaningful signal whenever this
+  // happens (it's already carrying most of the blend weight by the time
+  // cancellation is even possible), so it wins outright rather than this
+  // function normalizing a near-zero vector.
+  if (blendedLength < 1e-6) {
+    return new THREE.Vector2(inwardX, inwardZ);
+  }
+  return new THREE.Vector2(blendedX / blendedLength, blendedZ / blendedLength);
+}
 
 /**
  * The {target, position} pair easeCameraTo needs to frame an arbitrary
  * mesh — TourControls.tsx's one caller, stepping through elements in
  * tour mode. Not a drop-in replacement for annotationCameraTarget above
- * (see ELEMENT_VIEW_DIRECTION's own comment for why) and not built from
- * the whole-model bounding *sphere* driving OrbitControls' own min/max
- * distance (Scene.tsx's `extent.radius`) — the distance formula below is
- * expressed entirely in terms of controls.minDistance/maxDistance rather
- * than needing that radius passed in separately. `modelBounds`, by
- * contrast, *is* needed directly (see ELEMENT_MAX_CEILING_RATIO's own
- * comment for exactly why min/maxDistance alone weren't enough to catch
- * this) — TourControls.tsx threads it through from Scene.tsx's own
- * `extent.box`, the same value WalkthroughControls.tsx already receives
- * as its `bounds` prop for the identical reason (clamping a camera
- * position against the model's real vertical extent, not a computed
- * ratio that can drift arbitrarily far from it).
+ * (there's no stored normal to read the way an annotation has — see
+ * elementViewBearing's own comment for how the direction is derived
+ * instead) and not built from the whole-model bounding *sphere* driving
+ * OrbitControls' own min/max distance (Scene.tsx's `extent.radius`) —
+ * the distance formula below is expressed entirely in terms of
+ * controls.minDistance/maxDistance rather than needing that radius
+ * passed in separately. `modelBounds`, by contrast, *is* needed directly
+ * — both the ceiling clamp and elementViewBearing's own compass-bearing
+ * calculation need the model's real vertical/horizontal extent, not a
+ * ratio that can drift arbitrarily far from it. TourControls.tsx threads
+ * it through from Scene.tsx's own `extent.box`, the same value
+ * WalkthroughControls.tsx already receives as its `bounds` prop for an
+ * analogous reason (clamping a camera position against the model's real
+ * extent).
  *
  * Uses the mesh's own Box3 (setFromObject), not a bounding sphere, to
  * measure the element itself: a box captures a long, thin element (a
@@ -217,9 +306,12 @@ const ELEMENT_MAX_CEILING_RATIO = 0.15;
  * multiplier alone, since it scales linearly with each element's own
  * radius. The floor and cap only exist to keep both ends of that
  * continuum sane — see their own comments above for exactly why each
- * value was picked. position.y is then clamped a second time, against
- * modelBounds — see ELEMENT_MAX_CEILING_RATIO's own comment for why the
- * first clamp alone isn't sufficient for large/tall elements specifically.
+ * value was picked. The view direction itself is
+ * (elementViewBearing.x, ELEMENT_VIEW_ELEVATION, elementViewBearing.y) —
+ * an element-aware compass bearing at a fixed elevation angle — and
+ * position.y is clamped a second time against modelBounds afterward; see
+ * ELEMENT_MAX_CEILING_RATIO's own comment for why a fixed elevation
+ * component alone isn't sufficient for large/tall elements specifically.
  */
 export function elementCameraTarget(
   mesh: THREE.Object3D,
@@ -235,7 +327,10 @@ export function elementCameraTarget(
     controls.minDistance * ELEMENT_MIN_DISTANCE_FLOOR_RATIO,
     controls.maxDistance * ELEMENT_MAX_DISTANCE_CAP_RATIO,
   );
-  const position = target.clone().add(ELEMENT_VIEW_DIRECTION.clone().multiplyScalar(distance));
+
+  const bearing = elementViewBearing(target, modelBounds);
+  const direction = new THREE.Vector3(bearing.x, ELEMENT_VIEW_ELEVATION, bearing.y).normalize();
+  const position = target.clone().add(direction.multiplyScalar(distance));
 
   // Ceiling clamp — see ELEMENT_MAX_CEILING_RATIO's own comment. Only
   // ever pulls position.y *down*; never raises it, so a small element
