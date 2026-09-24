@@ -13,6 +13,9 @@
  * mode actually uses) stacks below that. VisibilityToolbar (per-category
  * show/hide chips + Reset) takes the otherwise-free bottom-right corner,
  * just above DemoDataBadge — see its own header for why there.
+ * CustomModelControl ("try your own model" — see its own header) stacks
+ * below the top-left wordmark/label block instead, the other corner with
+ * room to spare.
  *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark
@@ -45,6 +48,7 @@ import { CameraModeToggle } from "@/components/ui/CameraModeToggle";
 import { ControlsHelp } from "@/components/ui/ControlsHelp";
 import { VisibilityToolbar } from "@/components/ui/VisibilityToolbar";
 import { TourHud } from "@/components/ui/TourHud";
+import { CustomModelControl } from "@/components/ui/CustomModelControl";
 import { ReviewList } from "@/components/ui/ReviewList";
 import { DemoDataBadge } from "@/components/ui/DemoDataBadge";
 import { Toast } from "@/components/ui/Toast";
@@ -110,6 +114,7 @@ export default async function ProjectPage() {
         <CameraModeToggle />
         <ControlsHelp />
         <VisibilityToolbar />
+        <CustomModelControl />
         <ReviewList />
         <ElementPanel />
         <DemoDataBadge />

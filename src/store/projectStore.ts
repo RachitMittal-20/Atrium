@@ -97,6 +97,44 @@
  * in" is the entire ordering logic — so which experience a demo actually
  * gets depends on which data source is loaded at the time.
  *
+ * `customModelUrl`/customModelName/uploadedElements/customEyeHeightMeters
+ * are the "try your own model" feature: a reviewer picks a .glb/.gltf
+ * off their own machine (CustomModelControl.tsx), which becomes an
+ * object URL and gets rendered by src/components/three/UploadedModel.tsx
+ * — a completely separate, parallel path from BuildingModel.tsx's
+ * curated MESH_ENTRIES rendering, not a rewrite of it. Scene.tsx reads
+ * customModelUrl to decide which of the two model components to mount
+ * (never both). This is explicitly scoped down and says so in the UI:
+ * no persistence, no Supabase, no categories/spec sheets/color
+ * overrides/annotations for an uploaded model — it's a live, in-memory
+ * preview only, gone the moment the tab closes or a new file replaces
+ * it. uploadedElements is that model's own equivalent of `elements` —
+ * a { meshName, displayName } entry per mesh UploadedModel.tsx finds by
+ * traversing the loaded scene, in the GLB's own scene-graph order (there
+ * is no curated grouping possible for an arbitrary file the way
+ * ELEMENTS has) — TourControls.tsx and TourHud.tsx both read whichever
+ * of `elements`/uploadedElements is actually active (customModelUrl set
+ * or not) rather than either one unconditionally, and tourNext/tourPrev/
+ * tourGoTo clamp against activeTourCount() below for the same reason.
+ * hoveredElementId/selectedElementId are reused as-is for a custom
+ * model's own mesh keys (mesh.uuid or a unique mesh.name — see
+ * UploadedModel.tsx) rather than given a second, parallel pair of
+ * fields: only one model is ever mounted at a time, so the two id
+ * spaces never need to coexist, and ElementPanel.tsx's own `elements`
+ * lookup simply finds nothing for a custom-model key and stays closed
+ * (see UploadedModel.tsx's header for why "selection highlight, no
+ * panel" was the deliberate choice there). customEyeHeightMeters backs
+ * the manual eye-height slider CustomModelControl.tsx shows only for a
+ * custom model in walkthrough — see Scene.tsx's header for why an
+ * uploaded model can't reuse the curated model's door-height
+ * calibration, and WalkthroughControls.tsx's eyeHeightMetersOverride
+ * prop for where this value actually lands. setCustomModel/
+ * clearCustomModel both revoke the *previous* customModelUrl (a leaked
+ * object URL holds its Blob in memory for the page's whole lifetime
+ * otherwise) and reset every one of these plus cameraMode/selection/
+ * hover/tourIndex to a clean slate — "nothing stale leaks across
+ * models," including across two different uploads in the same session.
+ *
  * `hiddenElementIds` is element visibility: the meshNames currently
  * hidden from the 3D scene. Unlike the viewport bridge above this *is*
  * tracked state, deliberately — hiding something has to re-render both
@@ -196,6 +234,28 @@ export interface PendingPin {
   /** The mesh id the pinning click landed on — null in the (currently
    *  theoretical) case of a click that doesn't resolve to a mapped mesh. */
   meshName: string | null;
+}
+
+/**
+ * One mesh found while traversing an uploaded .glb/.gltf's scene graph —
+ * UploadedModel.tsx's own equivalent of an Element, deliberately *not*
+ * typed as one: there is no category, specification, status, or any of
+ * the rest of the curated FF&E schedule for an arbitrary file, so giving
+ * this the real Element shape would mean padding it with meaningless
+ * placeholder values everywhere a real Element's fields are expected.
+ * Everything that reads `elements` for tour/framing purposes (Tour
+ * mode's meshName lookup) only ever needs `meshName` anyway — the two
+ * shapes are deliberately compatible on that one field, nothing more.
+ */
+export interface UploadedElement {
+  /** mesh.name if present and unique across the traversal, else
+   *  mesh.uuid — see UploadedModel.tsx's own comment for the two-pass
+   *  derivation and why uuid is the safe fallback. */
+  meshName: string;
+  /** A human-readable label for TourHud.tsx's readout — mesh.name if the
+   *  exporter set one, else a positional fallback ("Mesh 3") so this is
+   *  never blank. */
+  displayName: string;
 }
 
 export interface HydrationData {
@@ -366,16 +426,73 @@ interface ProjectState {
   /** Advances one element, clamped at `elements.length - 1` — a no-op
    *  once already there (see TourHud.tsx, which disables its Next
    *  button at exactly this boundary rather than relying on this being
-   *  silently harmless, though it is). */
+   *  silently harmless, though it is). Also a no-op — silently, no state
+   *  change at all — while a previous step's camera ease is still in
+   *  flight; see TOUR_STEP_COOLDOWN_MS's own comment for why that gate
+   *  lives here rather than in whichever input method happened to call
+   *  this. */
   tourNext: () => void;
-  /** Steps back one element, clamped at 0 — same shape as tourNext. */
+  /** Steps back one element, clamped at 0 — same shape as tourNext,
+   *  including the same in-flight-ease no-op. */
   tourPrev: () => void;
-  /** Jumps straight to an index, clamped into range. Scene.tsx's Model()
-   *  calls this with 0 on every orbit/walkthrough/panorama -> tour
-   *  transition; nothing else calls it with anything but 0 today, but
-   *  it's the general primitive tourNext/tourPrev are both built from
-   *  rather than three independent clamping implementations. */
+  /** Jumps straight to an index, clamped into range — unlike
+   *  tourNext/tourPrev, never gated by the cooldown (see its own
+   *  implementation comment for why a reset has to always apply).
+   *  Scene.tsx's Model() calls this with 0 on every orbit/walkthrough/
+   *  panorama -> tour transition; nothing else calls it with anything
+   *  but 0 today, but it's the general primitive tourNext/tourPrev are
+   *  both built from rather than three independent clamping
+   *  implementations. */
   tourGoTo: (index: number) => void;
+
+  // --- Custom model ("try your own model" — see file header) ---
+  /** An object URL (URL.createObjectURL) for a reviewer-uploaded
+   *  .glb/.gltf, or null when the curated apartment model is active —
+   *  Scene.tsx reads this directly (`customModelUrl !== null`) rather
+   *  than a separate derived boolean field, the same "check the value,
+   *  don't duplicate it" preference hiddenElementIds/elementColors
+   *  already follow elsewhere in this store. */
+  customModelUrl: string | null;
+  /** The uploaded file's own name, for CustomModelControl.tsx's "local
+   *  preview" note — null exactly when customModelUrl is. */
+  customModelName: string | null;
+  /** Every mesh UploadedModel.tsx found in the current custom model, in
+   *  its own scene-graph traversal order — empty when no custom model is
+   *  active. Populated once, in an effect, after that component mounts
+   *  and traverses (never during render — see UploadedModel.tsx). */
+  uploadedElements: UploadedElement[];
+  setUploadedElements: (elements: UploadedElement[]) => void;
+  /** The manual eye-height override (real metres) CustomModelControl.tsx's
+   *  slider drives, read by WalkthroughControls.tsx's
+   *  eyeHeightMetersOverride prop in place of that file's own fixed
+   *  EYE_HEIGHT_METERS constant — only ever passed down when a custom
+   *  model is active (see Scene.tsx). Defaults to 1.65, the same value
+   *  WalkthroughControls.tsx's own constant uses, so the very first
+   *  walkthrough of a freshly-uploaded model (before the reviewer has
+   *  touched the slider) looks identical to what the curated model's
+   *  fixed constant would have produced. */
+  customEyeHeightMeters: number;
+  setCustomEyeHeightMeters: (meters: number) => void;
+  /**
+   * Activates a newly-uploaded model: revokes whatever customModelUrl
+   * previously held (an un-revoked object URL keeps its Blob resident in
+   * memory for the rest of the page's life — a real leak across repeated
+   * uploads, not just tidiness), stores the new url/name, and resets
+   * every piece of state that could otherwise leak stale meaning from
+   * one model to the next — selection/hover (a mesh.uuid from the old
+   * model matches nothing in the new one), tourIndex (position 0 in a
+   * differently-shaped list), uploadedElements (repopulated by
+   * UploadedModel.tsx's own mount effect once it traverses the new
+   * scene), customEyeHeightMeters (back to the same default a fresh
+   * upload should start from), and cameraMode (back to "orbit" — a
+   * mid-walkthrough or mid-tour view tuned to the *previous* model's
+   * scale has no reason to still make sense against the new one).
+   */
+  setCustomModel: (url: string, name: string) => void;
+  /** Reverts to the curated apartment model — revokes customModelUrl and
+   *  resets the exact same state setCustomModel does, for the identical
+   *  "nothing stale leaks across models" reason. */
+  clearCustomModel: () => void;
 
   // --- Selectors ---
   /** The Element whose meshName matches a BuildingModel mesh id, if any. */
@@ -506,10 +623,70 @@ function buildColorMap(elements: Element[], colorOverrides: ElementColorOverride
   return colors;
 }
 
+/**
+ * How many entries Tour mode is currently stepping through — `elements`
+ * (the curated schedule) when no custom model is active, uploadedElements
+ * when one is. tourNext/tourPrev/tourGoTo all clamp against this instead
+ * of `elements.length` directly, so a tour on a custom model clamps
+ * against *that* model's own mesh count, not the curated one's — without
+ * this, tourNext on a 12-mesh custom model would happily walk past index
+ * 11 and into a 43-element curated list it isn't even showing.
+ */
+function activeTourCount(state: Pick<ProjectState, "customModelUrl" | "elements" | "uploadedElements">): number {
+  return state.customModelUrl ? state.uploadedElements.length : state.elements.length;
+}
+
+// How long, in ms, after a tour step before another one is accepted —
+// mirrors src/lib/motion.ts's DURATION.frame (1.2s), the exact duration
+// of the camera ease TourControls.tsx's easeCameraTo call runs on every
+// step. Restated as a plain number here rather than imported: motion.ts
+// pulls in gsap and three as real runtime dependencies, and this store
+// is reachable from the marketing homepage's non-interactive Hero too —
+// the same bundle-weight reasoning pinAnnotation's own dynamic-import
+// comment gives elsewhere in this file for @supabase/supabase-js.
+//
+// Before this existed, tourNext/tourPrev had no rate limit of their own
+// at all — only TourControls.tsx's own wheel handler debounced itself
+// (at 500ms, shorter than the 1.2s ease), and TourHud.tsx's Prev/Next
+// buttons had no debounce whatsoever. Stepping faster than one ease
+// could finish — trivially easy via an ordinary scroll gesture, or a
+// few quick clicks — interrupted each tween before the camera ever
+// visually arrived, permanently desynchronising TourHud's instantly-
+// updating label from wherever the camera actually was: confirmed by an
+// actual Playwright trace stepping through every one of the 43 curated
+// elements, not assumed. Gating this here, once, is what makes every
+// input method (wheel, swipe, buttons) respect the same "let it finish
+// arriving" rule automatically, rather than needing the identical timer
+// duplicated in each caller — which is exactly how the wheel path ended
+// up with a *shorter* cooldown than the button path had *none* at all.
+const TOUR_STEP_COOLDOWN_MS = 1200;
+
+/**
+ * The full state reset setCustomModel/clearCustomModel both apply —
+ * every piece of state that could otherwise carry stale meaning from one
+ * model to another (or from a custom model back to the curated one). See
+ * setCustomModel's own comment in the ProjectState interface above for
+ * why each field is listed.
+ */
+const CUSTOM_MODEL_RESET = {
+  selectedElementId: null,
+  hoveredElementId: null,
+  mobileTab: "spec",
+  tourIndex: 0,
+  cameraMode: "orbit",
+  customEyeHeightMeters: 1.65,
+} as const satisfies Partial<ProjectState>;
+
 export const useProjectStore = create<ProjectState>((set, get) => {
   const viewport: ViewportBridge = { controls: null, invalidate: null };
   const elementObjects: Record<string, THREE.Object3D | null> = {};
   const annotationObjects: Record<string, THREE.Object3D | null> = {};
+  // Tour mode's shared rate-limit clock — see TOUR_STEP_COOLDOWN_MS's own
+  // comment. A closed-over plain variable, not tracked `set()` state,
+  // the same reasoning as viewport/elementObjects/annotationObjects
+  // above: nothing in the UI needs to react to it changing, it's purely
+  // internal bookkeeping for tourNext/tourPrev/tourGoTo.
+  let tourLastStepAt = 0;
 
   return {
     project: PROJECT,
@@ -737,21 +914,61 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     cameraMode: "orbit",
     setCameraMode: (cameraMode) => set({ cameraMode }),
 
-    // Tour mode. Clamped against get().elements.length — the *live*
-    // array, not a snapshot taken when tour mode was entered — so if
-    // elements ever changed size mid-tour (not something this app's UI
-    // can currently trigger, but nothing here assumes it can't) the
-    // clamp always reflects reality rather than a stale bound.
+    // Tour mode. Clamped against activeTourCount(state) — the *live*
+    // count of whichever list (elements/uploadedElements) is currently
+    // active, not a snapshot taken when tour mode was entered — so if
+    // that count ever changed mid-tour (switching custom models mid-
+    // session, say) the clamp always reflects reality rather than a
+    // stale bound.
     tourIndex: 0,
-    tourGoTo: (index) =>
+    // Always applies immediately, cooldown or not — this is the "jump
+    // straight to a known-good index" primitive Scene.tsx's pose-
+    // ownership effect calls with 0 on every entry into tour mode, and a
+    // reset has to work even if the reviewer left and re-entered tour
+    // within the same 1.2s window a previous step's cooldown left
+    // running. It still stamps tourLastStepAt itself, so the very next
+    // tourNext/tourPrev — including the one this same entry effect's
+    // arrival tween is implicitly racing — still waits its turn.
+    tourGoTo: (index) => {
+      tourLastStepAt = performance.now();
       set((state) => ({
-        tourIndex: Math.max(0, Math.min(index, Math.max(state.elements.length - 1, 0))),
-      })),
-    tourNext: () =>
+        tourIndex: Math.max(0, Math.min(index, Math.max(activeTourCount(state) - 1, 0))),
+      }));
+    },
+    tourNext: () => {
+      if (performance.now() - tourLastStepAt < TOUR_STEP_COOLDOWN_MS) return;
+      tourLastStepAt = performance.now();
       set((state) => ({
-        tourIndex: Math.min(state.tourIndex + 1, Math.max(state.elements.length - 1, 0)),
-      })),
-    tourPrev: () => set((state) => ({ tourIndex: Math.max(state.tourIndex - 1, 0) })),
+        tourIndex: Math.min(state.tourIndex + 1, Math.max(activeTourCount(state) - 1, 0)),
+      }));
+    },
+    tourPrev: () => {
+      if (performance.now() - tourLastStepAt < TOUR_STEP_COOLDOWN_MS) return;
+      tourLastStepAt = performance.now();
+      set((state) => ({ tourIndex: Math.max(state.tourIndex - 1, 0) }));
+    },
+
+    // Custom model — see file header. uploadedElements starts empty and
+    // is populated by UploadedModel.tsx's own mount effect once it
+    // traverses the newly-active model; setCustomModel/clearCustomModel
+    // both reset it to [] up front so a stale previous model's mesh list
+    // never briefly shows against a model that hasn't traversed yet.
+    customModelUrl: null,
+    customModelName: null,
+    uploadedElements: [],
+    setUploadedElements: (elements) => set({ uploadedElements: elements }),
+    customEyeHeightMeters: 1.65,
+    setCustomEyeHeightMeters: (meters) => set({ customEyeHeightMeters: meters }),
+    setCustomModel: (url, name) =>
+      set((state) => {
+        if (state.customModelUrl) URL.revokeObjectURL(state.customModelUrl);
+        return { ...CUSTOM_MODEL_RESET, customModelUrl: url, customModelName: name, uploadedElements: [] };
+      }),
+    clearCustomModel: () =>
+      set((state) => {
+        if (state.customModelUrl) URL.revokeObjectURL(state.customModelUrl);
+        return { ...CUSTOM_MODEL_RESET, customModelUrl: null, customModelName: null, uploadedElements: [] };
+      }),
 
     getElementByMeshId: (meshId) => get().elements.find((element) => element.meshName === meshId),
     getAnnotationsForElement: (elementId) =>

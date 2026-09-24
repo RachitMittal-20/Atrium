@@ -109,7 +109,12 @@ import { isTypingTarget } from "@/lib/keyboard";
 import { useProjectStore } from "@/store/projectStore";
 
 // The 1.6-1.7m human eye-height range's midpoint — see this file's header
-// for how this becomes a model-unit value via metersPerUnit.
+// for how this becomes a model-unit value via metersPerUnit. The default
+// only: a custom uploaded model (Scene.tsx's `extent.metersPerUnit` for
+// that path is a rough box-height guess, not a real calibration — see
+// that file's header) passes its own eyeHeightMetersOverride prop
+// instead, driven by CustomModelControl.tsx's manual slider, so this
+// constant is never even read for that case.
 const EYE_HEIGHT_METERS = 1.65;
 
 // How far a standing-on-toes/crouching nudge can move the eye off its
@@ -209,9 +214,23 @@ interface WalkthroughControlsProps {
    *  human-scale in this file (eye height, vertical range, margins) is
    *  stated in real metres and converted through this. */
   metersPerUnit: number;
+  /** Overrides EYE_HEIGHT_METERS when present — CustomModelControl.tsx's
+   *  manual slider, threaded down through Scene.tsx, only ever passed
+   *  for a custom uploaded model (see that file's header for why an
+   *  arbitrary model has no door mesh to calibrate scale off of, and
+   *  this file's own EYE_HEIGHT_METERS comment). Undefined for the
+   *  curated apartment model, which keeps using the fixed constant
+   *  exactly as before this prop existed. */
+  eyeHeightMetersOverride?: number;
 }
 
-export function WalkthroughControls({ bounds, radius, floorY, metersPerUnit }: WalkthroughControlsProps) {
+export function WalkthroughControls({
+  bounds,
+  radius,
+  floorY,
+  metersPerUnit,
+  eyeHeightMetersOverride,
+}: WalkthroughControlsProps) {
   const camera = useThree((state) => state.camera);
   const invalidate = useThree((state) => state.invalidate);
   const gl = useThree((state) => state.gl);
@@ -232,7 +251,7 @@ export function WalkthroughControls({ bounds, radius, floorY, metersPerUnit }: W
   const minZ = bounds.min.z - depth * BOUNDS_PADDING_RATIO;
   const maxZ = bounds.max.z + depth * BOUNDS_PADDING_RATIO;
 
-  const eyeHeightUnits = EYE_HEIGHT_METERS / metersPerUnit;
+  const eyeHeightUnits = (eyeHeightMetersOverride ?? EYE_HEIGHT_METERS) / metersPerUnit;
   const eyeOffsetRangeUnits = EYE_OFFSET_RANGE_METERS / metersPerUnit;
   const eyeOffsetSpeedUnits = EYE_OFFSET_SPEED_METERS_PER_SEC / metersPerUnit;
   const ceilingMarginUnits = CEILING_MARGIN_METERS / metersPerUnit;
@@ -294,6 +313,48 @@ export function WalkthroughControls({ bounds, radius, floorY, metersPerUnit }: W
     // unrelated re-render, not just on entering walkthrough.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-applies eye height the instant eyeHeightMetersOverride changes —
+  // CustomModelControl.tsx's slider, dragged while the reviewer stands
+  // still tuning it by eye. Without this, the new height would only ever
+  // show up once the per-frame loop below next ran, which only happens
+  // while a movement/rotate key is actually held (`if (keys.size === 0)
+  // return;`) — so standing still and dragging the slider would visibly
+  // do nothing until the next WASD press, reading as broken rather than
+  // as "works while moving." This effect covers exactly that gap: it
+  // fires on eyeHeightUnits changing, independent of whether any key is
+  // held, and reuses the camera's *current* x/z (wherever it already is)
+  // rather than resetting position — this is a height correction, not a
+  // re-entry.
+  //
+  // eyeHeightUnits is a plain number recomputed fresh every render, so
+  // React's dependency comparison (Object.is on the value, not a
+  // reference) already only re-fires this when it actually changes —
+  // skipDidMountRef exists purely to not redundantly re-apply on the
+  // very first render, since the mount effect above already set the
+  // correct initial position. resolveFloorY/clampEyeY are deliberately
+  // left out of the dependency array (same reasoning the mount effect's
+  // own disable comment gives): they're plain functions recreated every
+  // render from the same up-to-date props/refs, not stable references,
+  // and this effect only needs to react to eyeHeightUnits itself
+  // changing, not to unrelated re-renders recreating those closures.
+  const skipDidMountRef = useRef(true);
+  useEffect(() => {
+    if (skipDidMountRef.current) {
+      skipDidMountRef.current = false;
+      return;
+    }
+    const floorAtPosition = resolveFloorY(camera.position.x, camera.position.z);
+    const nextY = clampEyeY(floorAtPosition + eyeHeightUnits + eyeOffsetRef.current, floorAtPosition);
+    // .set(), not a bare `camera.position.y = nextY` assignment — matches
+    // the mount effect above's own pattern, which the immutability lint
+    // rule (see the per-frame loop's own disable block further down, for
+    // the one place a bare assignment is unavoidable) treats differently
+    // from a direct property write.
+    camera.position.set(camera.position.x, nextY, camera.position.z);
+    invalidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eyeHeightUnits, camera, invalidate]);
 
   // WASD/arrow/Q/E keys — a plain held-key set, not per-keydown deltas,
   // so multiple keys (forward + strafe, or move + rotate) combine

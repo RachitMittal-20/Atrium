@@ -13,21 +13,35 @@
  * Two responsibilities, kept together in one component because they're
  * two sides of the same feature (stepping through elements), the same
  * way WalkthroughControls owns both movement and its own key state:
- *  1. Reacts to tourIndex — projectStore's own position in `elements` —
- *     by easing the camera onto that element via lib/motion's
+ *  1. Reacts to tourIndex — projectStore's own position in whichever of
+ *     `elements`/uploadedElements is currently active (see that store's
+ *     own header) — by easing the camera onto that element via lib/motion's
  *     elementCameraTarget + easeCameraTo. Scene.tsx's Model() resets
  *     tourIndex to 0 itself on every entry into tour mode (see that
  *     file's pose-ownership effect), so this component doesn't need an
  *     "I was just mounted" special case — the very first render already
  *     sees a real tourIndex and eases onto element 0 like any other step.
- *  2. Reads the three input methods that advance/retreat tourIndex:
- *     mouse wheel, touch swipe (vertical), and — mounted separately, in
- *     ordinary DOM outside the Canvas — TourHud.tsx's Prev/Next buttons.
- *     This component owns only the two Canvas-native inputs (wheel,
- *     swipe), listening on gl.domElement the same way SmoothZoom.tsx
- *     listens for wheel/pinch and WalkthroughControls listens for
- *     pointer-drag — TourHud calls projectStore's tourNext/tourPrev
- *     directly, needing no r3f context of its own to do it.
+ *  2. Reads the two Canvas-native input methods that advance/retreat
+ *     tourIndex: mouse wheel and touch swipe (vertical). TourHud.tsx's
+ *     Prev/Next buttons are the third input method, mounted separately
+ *     in ordinary DOM outside the Canvas, calling the exact same
+ *     projectStore actions (tourNext/tourPrev) directly — needing no r3f
+ *     context of its own to do it. This component listens on
+ *     gl.domElement, the same element SmoothZoom.tsx listens for
+ *     wheel/pinch on and WalkthroughControls listens for pointer-drag
+ *     on, so wheel/swipe only ever fire for gestures actually over the
+ *     3D view.
+ *
+ * Step rate-limiting — one gesture (or one click) should advance exactly
+ * one element, and a new step should never start before the *previous*
+ * one has visually finished arriving — lives in projectStore's
+ * tourNext/tourPrev themselves, not here (see that file's own comment on
+ * why: it has to cover all three input methods identically, including
+ * TourHud's buttons, which have no gesture of their own to debounce).
+ * This file's wheel/swipe handlers call tourNext/tourPrev on every
+ * qualifying input without their own throttling — the store's shared
+ * gate is what actually turns "many wheel events in one scroll" or "a
+ * few enthusiastic clicks" into one step at a time.
  *
  * No free-look: unlike WalkthroughControls/PanoramaControls, this file
  * never reads mouse-drag or Q/E input at all. Tour mode is a guided,
@@ -48,26 +62,29 @@
 "use client";
 
 import { useEffect } from "react";
+import * as THREE from "three";
 import { useThree } from "@react-three/fiber";
 import { useProjectStore } from "@/store/projectStore";
 import { easeCameraTo, elementCameraTarget } from "@/lib/motion";
-
-// One wheel gesture (a burst of many small deltaY events firing in quick
-// succession) or one swipe should step exactly once — not once per
-// individual wheel event, which is what a raw handleWheel would do on
-// a trackpad's continuous scroll. A simple last-step timestamp, checked
-// at the *leading* edge of a gesture rather than debounced to the
-// trailing edge, is what makes the first flick of a scroll feel
-// immediate instead of laggy; everything else within the cooldown
-// window is silently absorbed as "still the same gesture."
-const STEP_COOLDOWN_MS = 500;
 
 // How far a touch has to travel vertically, in CSS pixels, before it
 // counts as a deliberate swipe rather than a stray finger tremor or the
 // start of some other gesture.
 const SWIPE_MIN_DISTANCE_PX = 40;
 
-export function TourControls() {
+interface TourControlsProps {
+  /** The model's measured world-space bounding box — the same one
+   *  Scene.tsx's Model() already computes and hands to
+   *  WalkthroughControls.tsx as `bounds`, passed through here to
+   *  lib/motion's elementCameraTarget so it can clamp a framed element's
+   *  camera height against the *model's* own vertical extent, not just
+   *  the element's own — see that function's own comment for the bug
+   *  this fixes (a large structural element's camera position ending up
+   *  well above the model's actual roofline). */
+  bounds: THREE.Box3;
+}
+
+export function TourControls({ bounds }: TourControlsProps) {
   const camera = useThree((state) => state.camera);
   const invalidate = useThree((state) => state.invalidate);
   const gl = useThree((state) => state.gl);
@@ -82,22 +99,28 @@ export function TourControls() {
   // effect's own dependency is tourIndex, not the store's current
   // elements array, which would re-run it on every unrelated store
   // write (a remote annotation arriving, say) rather than only on an
-  // actual step.
+  // actual step. `bounds` is a plain prop, not reactive store state, so
+  // it's read directly rather than through getState().
   useEffect(() => {
     const state = useProjectStore.getState();
     const { controls } = state.getViewport();
-    const element = state.elements[tourIndex];
+    // Whichever list is actually active — see projectStore.ts's own
+    // header on why a custom model steps through uploadedElements
+    // instead of the curated `elements`. Both shapes carry a meshName
+    // field, so no further branching is needed past this one line.
+    const source = state.customModelUrl ? state.uploadedElements : state.elements;
+    const element = source[tourIndex];
     // Both guards are defensive, not expected in normal operation:
     // controls can only be null for an instant before OrbitControls
     // itself has mounted (Scene.tsx already gates this component on
     // `extent`, which only exists after that), and every tourIndex this
-    // store ever produces is clamped into `elements`' own bounds by
-    // tourNext/tourPrev/tourGoTo.
+    // store ever produces is clamped into the active source's own bounds
+    // by tourNext/tourPrev/tourGoTo (via activeTourCount).
     if (!controls || !element) return;
     const mesh = state.getElementObject(element.meshName);
     if (!mesh) return;
 
-    const { target, position } = elementCameraTarget(mesh, controls);
+    const { target, position } = elementCameraTarget(mesh, controls, bounds);
     const timeline = easeCameraTo(controls, camera, invalidate, target, position);
     // Killed, not left to finish, if tourIndex changes again mid-tween
     // (a fast double-click on Next, say) — the same cleanup
@@ -107,33 +130,29 @@ export function TourControls() {
     return () => {
       timeline.kill();
     };
-  }, [tourIndex, camera, invalidate]);
+  }, [tourIndex, camera, invalidate, bounds]);
 
   // Wheel and vertical touch-swipe — the two Canvas-native inputs (see
   // file header; TourHud.tsx's buttons are the third, outside the
   // Canvas entirely). Listens on gl.domElement, the same element
   // SmoothZoom.tsx and WalkthroughControls' own drag handling already
   // listen on, so this only ever fires for gestures actually over the
-  // 3D view.
+  // 3D view. Neither handler below debounces its own input — every
+  // qualifying wheel/swipe calls tourNext/tourPrev directly, and
+  // projectStore's own shared rate limit (see that file's comment) is
+  // what turns a burst of wheel events or a flurry of swipes into one
+  // step at a time.
   useEffect(() => {
     const element = gl.domElement;
-    let lastStepAt = 0;
-
-    const step = (forward: boolean) => {
-      const now = performance.now();
-      if (now - lastStepAt < STEP_COOLDOWN_MS) return;
-      lastStepAt = now;
-      const actions = useProjectStore.getState();
-      if (forward) actions.tourNext();
-      else actions.tourPrev();
-    };
 
     // preventDefault so a scroll gesture over the canvas steps the tour
     // instead of also trying to scroll the page underneath it — the
     // same reasoning SmoothZoom.tsx's own wheel handler already uses.
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
-      step(event.deltaY > 0);
+      const actions = useProjectStore.getState();
+      if (event.deltaY > 0) actions.tourNext();
+      else actions.tourPrev();
     };
 
     // A plain start/end Y comparison, not a running gesture tracker —
@@ -154,7 +173,9 @@ export function TourControls() {
       // Swipe up (the finger moves toward the top of the screen, delta
       // > 0) advances — the same convention a vertically-scrolling feed
       // already uses for "next."
-      step(delta > 0);
+      const actions = useProjectStore.getState();
+      if (delta > 0) actions.tourNext();
+      else actions.tourPrev();
     };
 
     element.addEventListener("wheel", handleWheel, { passive: false });

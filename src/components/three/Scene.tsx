@@ -74,6 +74,40 @@
  * down to WalkthroughControls.tsx so its eye-height and vertical-range
  * constants can be stated in real metres instead of an arbitrary ratio.
  *
+ * Two model components, never both mounted at once: BuildingModel (the
+ * curated apartment, unchanged — MESH_ENTRIES, curated selection/hover/
+ * color-override/visibility, the works) when projectStore's
+ * customModelUrl is null, or UploadedModel (a reviewer's own .glb/.gltf,
+ * generically traversed — see that file's own header) when it's set.
+ * Model() picks between them with a plain ternary around <Center>'s one
+ * child. The door/floor-height calibration above only ever makes sense
+ * for the curated model — an arbitrary uploaded file has no mesh named
+ * "interior-door" or "floor" to look up (getElementObject for either
+ * simply returns null), so a custom model takes a different, explicitly
+ * rougher path instead: metersPerUnit is guessed from the model's own
+ * measured bounding-box height, assuming it maps to a typical
+ * ASSUMED_INTERIOR_HEIGHT_METERS-tall interior — a starting point the
+ * reviewer then tunes by eye via CustomModelControl.tsx's eye-height
+ * slider (threaded down as WalkthroughControls' own
+ * eyeHeightMetersOverride prop), never meant to be authoritative the way
+ * the door calibration is. floorY's existing fallback (the whole model's
+ * own box.min.y, used whenever no "floor" mesh is found) already needed
+ * no changes for this — it was already the generic case, not an
+ * apartment-specific one; see ModelExtent's own comment.
+ *
+ * The calibration effect below explicitly depends on customModelUrl, not
+ * just [camera, invalidate] — switching *to* a custom model always
+ * re-measures for free (useGLTF suspending on a brand-new blob url
+ * unmounts and remounts this whole component, per React's ordinary
+ * Suspense behaviour, which re-runs every effect from scratch), but
+ * switching *back* to the curated model doesn't suspend at all (its GLTF
+ * is already cached — see src/lib/assets.ts's useGLTF.preload), so
+ * nothing would otherwise trigger a fresh measurement in that direction
+ * and `extent` would stay stuck at the custom model's dimensions. Listing
+ * the dependency explicitly makes both directions equally deliberate
+ * instead of one working by Suspense coincidence and the other silently
+ * not.
+ *
  * Camera mode: projectStore's cameraMode ("orbit" | "walkthrough" |
  * "panorama" | "tour", driven by CameraModeToggle.tsx) decides which of
  * four mutually-exclusive controls drives the camera each frame —
@@ -138,6 +172,7 @@ import {
   OrbitControls,
 } from "@react-three/drei";
 import { BuildingModel } from "@/components/three/BuildingModel";
+import { UploadedModel } from "@/components/three/UploadedModel";
 import { SmoothZoom } from "@/components/three/SmoothZoom";
 import { WalkthroughControls } from "@/components/three/WalkthroughControls";
 import { PanoramaControls } from "@/components/three/PanoramaControls";
@@ -205,6 +240,13 @@ function InvalidateOnScroll() {
 // Model()'s useLayoutEffect below for how this becomes metersPerUnit.
 const DOOR_HEIGHT_METERS = 2.032;
 
+// The midpoint of a typical 2.4-3m residential interior height — the
+// starting-point assumption a custom uploaded model's metersPerUnit is
+// guessed from (there's no door mesh to calibrate off of the way the
+// curated model has). See this file's own header for the full reasoning
+// and why this is explicitly a rough starting guess, not a calibration.
+const ASSUMED_INTERIOR_HEIGHT_METERS = 2.7;
+
 interface ModelExtent {
   size: THREE.Vector3;
   radius: number;
@@ -243,6 +285,11 @@ function Model() {
   const invalidate = useThree((state) => state.invalidate);
   const [extent, setExtent] = useState<ModelExtent | null>(null);
   const cameraMode = useProjectStore((state) => state.cameraMode);
+  // Which of the two model components renders below, and the one piece
+  // of custom-model-only state the calibration effect needs directly —
+  // see this file's own header for both.
+  const customModelUrl = useProjectStore((state) => state.customModelUrl);
+  const customEyeHeightMeters = useProjectStore((state) => state.customEyeHeightMeters);
 
   // ElementPanel.tsx (outside the Canvas) eases the camera onto whatever
   // gets selected — it can only do that with a live handle on invalidate,
@@ -284,14 +331,24 @@ function Model() {
     // commit before this layout effect runs (refs attach during commit,
     // ahead of any layout effect further up the tree), so both are
     // reliably populated here on every fresh mount, demo data or live.
-    const doorObject = useProjectStore.getState().getElementObject("interior-door");
-    const doorBox = doorObject ? new THREE.Box3().setFromObject(doorObject) : null;
-    const doorHeight = doorBox && !doorBox.isEmpty() ? doorBox.max.y - doorBox.min.y : null;
-    // Fallback ratio (this model's own actual measured door-height-to-
-    // metersPerUnit relationship, ~1210.47 units for a 2.032m door) only
-    // matters if the door mesh is ever missing/renamed — every other path
-    // uses the real measurement above.
-    const metersPerUnit = doorHeight ? DOOR_HEIGHT_METERS / doorHeight : DOOR_HEIGHT_METERS / (sphere.radius * 0.1723);
+    // Custom model: no "interior-door" mesh exists to calibrate off of,
+    // so this skips the door lookup entirely and guesses metersPerUnit
+    // from the model's own overall height instead — see this file's own
+    // header and ASSUMED_INTERIOR_HEIGHT_METERS' comment for why, and
+    // CustomModelControl.tsx for the manual slider that refines it.
+    let metersPerUnit: number;
+    if (customModelUrl) {
+      metersPerUnit = ASSUMED_INTERIOR_HEIGHT_METERS / size.y;
+    } else {
+      const doorObject = useProjectStore.getState().getElementObject("interior-door");
+      const doorBox = doorObject ? new THREE.Box3().setFromObject(doorObject) : null;
+      const doorHeight = doorBox && !doorBox.isEmpty() ? doorBox.max.y - doorBox.min.y : null;
+      // Fallback ratio (this model's own actual measured door-height-to-
+      // metersPerUnit relationship, ~1210.47 units for a 2.032m door)
+      // only matters if the door mesh is ever missing/renamed — every
+      // other path uses the real measurement above.
+      metersPerUnit = doorHeight ? DOOR_HEIGHT_METERS / doorHeight : DOOR_HEIGHT_METERS / (sphere.radius * 0.1723);
+    }
 
     const floorObject = useProjectStore.getState().getElementObject("floor");
     const floorBox = floorObject ? new THREE.Box3().setFromObject(floorObject) : null;
@@ -305,7 +362,10 @@ function Model() {
 
     setExtent({ size, radius: sphere.radius, box: box.clone(), floorY, metersPerUnit });
     invalidate();
-  }, [camera, invalidate]);
+    // customModelUrl is a real, deliberate dependency, not incidental —
+    // see this file's own header for why both directions of switching
+    // between the curated and a custom model need this effect to re-run.
+  }, [camera, invalidate, customModelUrl]);
 
   // Orbit's own camera pose across a non-orbit excursion (see file
   // header). previousModeRef lets this tell "which way did cameraMode
@@ -367,7 +427,8 @@ function Model() {
             y=0 (its top at zero); `top` is what actually sits it on the
             floor at y=0, where ContactShadows below expects it. */}
         <Center ref={centerRef} top>
-          <BuildingModel />
+          {/* See this file's header — never both at once. */}
+          {customModelUrl ? <UploadedModel url={customModelUrl} /> : <BuildingModel />}
         </Center>
       </Bounds>
 
@@ -477,6 +538,9 @@ function Model() {
           radius={extent.radius}
           floorY={extent.floorY}
           metersPerUnit={extent.metersPerUnit}
+          // Only ever passed for a custom model — see WalkthroughControls'
+          // own comment on this prop and Scene.tsx's header for why.
+          eyeHeightMetersOverride={customModelUrl ? customEyeHeightMeters : undefined}
         />
       )}
 
@@ -497,8 +561,11 @@ function Model() {
           as reliant on OrbitControls being disabled-not-unmounted and
           on Model()'s pose-ownership effect (above) having already run
           this same commit, before this component's own mount effect
-          reads tourIndex. */}
-      {extent && cameraMode === "tour" && <TourControls />}
+          reads tourIndex. bounds is passed through to lib/motion's
+          elementCameraTarget — see that function's own comment for why
+          it needs the model's real vertical extent, not just the
+          per-element one, to frame a large structural element sanely. */}
+      {extent && cameraMode === "tour" && <TourControls bounds={extent.box} />}
     </>
   );
 }

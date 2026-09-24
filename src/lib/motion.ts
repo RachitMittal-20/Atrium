@@ -163,16 +163,43 @@ const ELEMENT_MAX_DISTANCE_CAP_RATIO = 0.3;
 // architectural photograph would use by default.
 const ELEMENT_VIEW_DIRECTION = new THREE.Vector3(1, 0.6, 1).normalize();
 
+// How far above the *whole model's* own highest point the camera is
+// still allowed to rise, as a fraction of the model's own total height —
+// see elementCameraTarget's own comment for the bug this specifically
+// fixes, confirmed by measurement (a Playwright trace of every tour step
+// against the real model), not guessed: for a large structural/envelope
+// element, sphere.radius alone can be a
+// sizeable fraction of the *whole model's* own radius, which pushes
+// `distance` up near ELEMENT_MAX_DISTANCE_CAP_RATIO's cap — and because
+// ELEMENT_VIEW_DIRECTION's y-component is fixed, that large distance
+// multiplies straight through into an equally large vertical offset,
+// regardless of how tall the element or the model actually is. Measured
+// on the curated model: framing "building-shell-lower" (own top at
+// y≈1557, in a model whose own overall top is y≈1897) put the camera at
+// y≈4075 — more than double the *entire model's* own tallest point, a
+// bird's-eye shot looking straight down at the roof instead of a normal
+// elevated 3/4 exterior view. 0.15 keeps the camera's ceiling at 15% of
+// the model's own height above its actual top — generous enough that a
+// genuinely tall element (the full-height envelope) still reads as
+// "elevated," nowhere near enough to end up floating above the roof.
+const ELEMENT_MAX_CEILING_RATIO = 0.15;
+
 /**
  * The {target, position} pair easeCameraTo needs to frame an arbitrary
  * mesh — TourControls.tsx's one caller, stepping through elements in
  * tour mode. Not a drop-in replacement for annotationCameraTarget above
  * (see ELEMENT_VIEW_DIRECTION's own comment for why) and not built from
- * the whole-model bounding sphere driving OrbitControls' own min/max
- * distance (Scene.tsx's `extent.radius`) — this file has no access to
- * that number at all, only to `controls`, which is exactly why the
- * distance formula below is expressed entirely in terms of
- * controls.minDistance/maxDistance rather than needing it passed in.
+ * the whole-model bounding *sphere* driving OrbitControls' own min/max
+ * distance (Scene.tsx's `extent.radius`) — the distance formula below is
+ * expressed entirely in terms of controls.minDistance/maxDistance rather
+ * than needing that radius passed in separately. `modelBounds`, by
+ * contrast, *is* needed directly (see ELEMENT_MAX_CEILING_RATIO's own
+ * comment for exactly why min/maxDistance alone weren't enough to catch
+ * this) — TourControls.tsx threads it through from Scene.tsx's own
+ * `extent.box`, the same value WalkthroughControls.tsx already receives
+ * as its `bounds` prop for the identical reason (clamping a camera
+ * position against the model's real vertical extent, not a computed
+ * ratio that can drift arbitrarily far from it).
  *
  * Uses the mesh's own Box3 (setFromObject), not a bounding sphere, to
  * measure the element itself: a box captures a long, thin element (a
@@ -190,11 +217,14 @@ const ELEMENT_VIEW_DIRECTION = new THREE.Vector3(1, 0.6, 1).normalize();
  * multiplier alone, since it scales linearly with each element's own
  * radius. The floor and cap only exist to keep both ends of that
  * continuum sane — see their own comments above for exactly why each
- * value was picked.
+ * value was picked. position.y is then clamped a second time, against
+ * modelBounds — see ELEMENT_MAX_CEILING_RATIO's own comment for why the
+ * first clamp alone isn't sufficient for large/tall elements specifically.
  */
 export function elementCameraTarget(
   mesh: THREE.Object3D,
   controls: OrbitControlsImpl,
+  modelBounds: THREE.Box3,
 ): { target: THREE.Vector3; position: THREE.Vector3 } {
   const box = new THREE.Box3().setFromObject(mesh);
   const target = box.getCenter(new THREE.Vector3());
@@ -206,5 +236,14 @@ export function elementCameraTarget(
     controls.maxDistance * ELEMENT_MAX_DISTANCE_CAP_RATIO,
   );
   const position = target.clone().add(ELEMENT_VIEW_DIRECTION.clone().multiplyScalar(distance));
+
+  // Ceiling clamp — see ELEMENT_MAX_CEILING_RATIO's own comment. Only
+  // ever pulls position.y *down*; never raises it, so a small element
+  // (whose own unclamped position.y already sits comfortably below the
+  // model's own top) is completely unaffected.
+  const modelHeight = modelBounds.max.y - modelBounds.min.y;
+  const ceilingY = modelBounds.max.y + modelHeight * ELEMENT_MAX_CEILING_RATIO;
+  position.y = Math.min(position.y, ceilingY);
+
   return { target, position };
 }

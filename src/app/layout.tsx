@@ -44,6 +44,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       className={`${bodoni.variable} ${plexSans.variable} ${plexMono.variable} h-full antialiased`}
+      // Browser extensions (Immersive Translate and similar) inject
+      // attributes onto <html> before React hydrates, which React then
+      // reports as a hydration mismatch even though nothing about this
+      // app's own output is wrong. This is Next.js's documented fix —
+      // it only silences the warning for this one element's attributes,
+      // it does not suppress mismatch warnings anywhere else in the tree.
+      suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
         <Preloader />

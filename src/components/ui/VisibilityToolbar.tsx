@@ -39,6 +39,15 @@
  * layer as the top-right column — so when ElementPanel (z-20, opaque)
  * opens on the right, or a mobile bottom sheet slides up, it simply sits
  * underneath rather than competing with them.
+ *
+ * Hidden entirely while a custom uploaded model is active (projectStore's
+ * customModelUrl set): every chip here toggles visibility on the
+ * *curated* schedule's categories, which aren't even the meshes on
+ * screen once a custom model has replaced BuildingModel.tsx — showing it
+ * then wouldn't merely do nothing, it would show controls that visibly
+ * refer to a different model than the one in view. See
+ * CustomModelControl.tsx for the "try your own model" feature this
+ * yields to.
  */
 "use client";
 
@@ -56,6 +65,7 @@ export function VisibilityToolbar() {
   const hiddenElementIds = useProjectStore((state) => state.hiddenElementIds);
   const toggleCategoryVisibility = useProjectStore((state) => state.toggleCategoryVisibility);
   const resetVisibility = useProjectStore((state) => state.resetVisibility);
+  const customModelUrl = useProjectStore((state) => state.customModelUrl);
 
   // Visible/total per category, derived fresh from the store every time
   // either input changes — see file header for why this is never stored.
@@ -72,6 +82,11 @@ export function VisibilityToolbar() {
   }, [elements, hiddenElementIds]);
 
   const nothingHidden = hiddenElementIds.size === 0;
+
+  // See file header — the curated categories this toolbar controls
+  // aren't meaningful against whatever's actually on screen once a
+  // custom model has replaced BuildingModel.tsx.
+  if (customModelUrl) return null;
 
   return (
     <div

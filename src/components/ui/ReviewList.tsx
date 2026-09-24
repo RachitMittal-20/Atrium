@@ -45,6 +45,12 @@
  *    itself, behind a SPEC/COMMENTS tab bound to projectStore's
  *    mobileTab. That's "a tab alongside the element sheet": one sheet,
  *    two tabs, never two sheets stacked on a small screen.
+ *  - A custom model active (projectStore's customModelUrl): neither of
+ *    the above — this component renders nothing at all, on any layout.
+ *    Every row here is pinned to the curated apartment's 3D coordinates,
+ *    and AnnotationMarker.tsx only ever mounts inside BuildingModel.tsx,
+ *    which isn't even mounted once an uploaded model has replaced it —
+ *    see the top-level ReviewList() function's own comment.
  */
 "use client";
 
@@ -415,6 +421,7 @@ function MobileReviewSheet() {
 export function ReviewList() {
   const isMobile = useIsMobile(PIN_BREAKPOINT);
   const isElementPanelOpen = useProjectStore((state) => state.selectedElementId !== null);
+  const customModelUrl = useProjectStore((state) => state.customModelUrl);
 
   // "J"/"K" step through annotations in array order, easing the camera to
   // each — a plain ref, not state: nothing here needs to re-render when
@@ -434,6 +441,19 @@ export function ReviewList() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  // Every annotation here is pinned to the *curated* apartment's 3D
+  // coordinates (and AnnotationMarker.tsx only ever mounts inside
+  // BuildingModel.tsx's own JSX — see that file's header) — while a
+  // custom model is active, BuildingModel isn't even mounted, so no
+  // marker exists for any of these rows to point at. Rather than leave
+  // a panel full of interactive-looking rows that silently do nothing
+  // when clicked (openAnnotation's camera-ease guard already no-ops
+  // gracefully for a missing marker, but "does nothing" still reads as
+  // broken, not as a real limitation), this hides the whole panel —
+  // the same choice VisibilityToolbar.tsx makes for the same underlying
+  // reason (see that file's own comment).
+  if (customModelUrl) return null;
 
   if (isMobile) {
     // Once ElementPanel's own sheet is open, comments are reachable as a
