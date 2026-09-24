@@ -125,16 +125,32 @@ export async function getProject(): Promise<Project | null> {
 
 /**
  * Every Element belonging to a project — the FF&E/finishes schedule.
- * Ordered by name for a stable, readable order; nothing in the app reads
- * positional meaning into this array the way it does for annotations'
- * numerals. Called by src/app/project/page.tsx's server-side initial
- * load. An empty result (a project with no elements seeded yet) is
- * returned as `[]`, not treated as an error — ElementPanel and
- * BuildingModel already handle "no matching element" for any given mesh.
+ * Ordered by order_index (see supabase/migrations/
+ * 20260917000000_elements_order_index.sql), not by name: this now *is*
+ * positional data another reader relies on — projectStore's tourIndex
+ * steps straight through this array in whatever order it comes back in
+ * (src/components/three/TourControls.tsx), and that migration exists
+ * specifically to make this order match src/data/project.ts's ELEMENTS
+ * array's own curated, architecturally-grouped order, the same order the
+ * local demo data's tour already walked "for free." `name` is a
+ * secondary sort key, not the primary one it used to be — order_index is
+ * NOT NULL with a sane default (see that migration's own comment), so
+ * this is only a real tiebreak for rows that share the same order_index
+ * (every row this migration doesn't recognise falls to that same
+ * default), not a null-handling concern. Called by
+ * src/app/project/page.tsx's server-side initial load. An empty result
+ * (a project with no elements seeded yet) is returned as `[]`, not
+ * treated as an error — ElementPanel and BuildingModel already handle
+ * "no matching element" for any given mesh.
  */
 export async function getElements(projectId: string): Promise<Element[]> {
   const client = requireSupabase();
-  const { data, error } = await client.from("elements").select("*").eq("project_id", projectId).order("name");
+  const { data, error } = await client
+    .from("elements")
+    .select("*")
+    .eq("project_id", projectId)
+    .order("order_index")
+    .order("name");
   if (error) throw new Error(`getElements: ${error.message}`);
   return (data ?? []).map(mapElement);
 }

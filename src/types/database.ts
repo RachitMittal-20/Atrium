@@ -9,17 +9,20 @@
  * and verified: `supabase db reset` to apply supabase/migrations/ and
  * supabase/seed.sql fresh, then re-run the gen types command above.
  *
- * The `element_color_overrides` entry was added by hand, alongside
- * 20260916000000_element_color_overrides.sql, in an environment with no
- * local Supabase stack to run the real generator against — hand-typed to
- * match that migration's columns/constraints exactly (including
- * `isOneToOne: true` on its element_id relationship, which the generator
- * emits specifically because that column carries a unique constraint,
- * the same as every other Relationships entry below it). Treat this one
- * entry as unverified against the real CLI output until someone with a
- * local stack runs the regenerate command above and confirms it matches
- * byte-for-byte — everything else in this file is still the genuine
- * generated output.
+ * The `element_color_overrides` table was originally added by hand (no
+ * local stack to run the real generator against at the time) and has
+ * since been confirmed correct: regenerated for real via
+ * `supabase gen types typescript --linked` against the live project and
+ * verified to match. That table's entry below is genuine generated
+ * output, not a hand-typed approximation.
+ *
+ * elements.order_index (alongside supabase/migrations/
+ * 20260917000000_elements_order_index.sql) was added by hand the same
+ * way element_color_overrides originally was — no local stack available
+ * in that environment either. Treat just this one field as unverified
+ * against the real CLI output until the migration is applied and this
+ * file is regenerated and confirmed to match — everything else here,
+ * including the rest of the elements table, is genuine generated output.
  *
  * src/lib/supabase.ts is the only place this file is imported.
  */
@@ -200,6 +203,7 @@ export type Database = {
           id: string
           mesh_name: string
           name: string
+          order_index: number
           project_id: string
           responsible_party: string
           specification: Json
@@ -211,6 +215,7 @@ export type Database = {
           id?: string
           mesh_name: string
           name: string
+          order_index?: number
           project_id: string
           responsible_party: string
           specification?: Json
@@ -222,6 +227,7 @@ export type Database = {
           id?: string
           mesh_name?: string
           name?: string
+          order_index?: number
           project_id?: string
           responsible_party?: string
           specification?: Json

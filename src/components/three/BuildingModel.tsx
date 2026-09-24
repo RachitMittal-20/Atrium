@@ -21,14 +21,19 @@
  *    Suppressed while in pin mode: ModeIndicator.tsx owns the cursor then
  *    (a crosshair), and highlighting an element you're about to pin past
  *    would read as "about to select", which isn't what's happening.
- *  - onClick's behaviour depends on projectStore's `mode`: in "review" it
+ *  - onClick no-ops entirely while projectStore's cameraMode is "tour" —
+ *    a guided, hands-off view (see TourControls.tsx's own header), where
+ *    a stray click selecting an element or starting a pin would fight
+ *    the automatic camera moves rather than do anything useful. Outside
+ *    tour, onClick's behaviour depends on `mode` instead: in "review" it
  *    sets selectedElementId as before; in "pin" it instead raycasts the
  *    click into a world point + surface normal, converts both into
  *    outerGroupRef's local space (see MESH_ROTATION and handleClick
  *    below), and hands them to projectStore as `pendingPin` for
  *    AnnotationComposer to pick up. Either way the empty-space click that
  *    clears selection is wired on the Canvas itself (onPointerMissed, in
- *    Scene.tsx).
+ *    Scene.tsx) — and is itself unaffected by tour mode, since nothing
+ *    about tour touches that handler.
  *  - every one of these stops propagation, so a click or hover on the
  *    frontmost mesh never also registers on whatever is behind it.
  *  - a drei Html label follows the hovered mesh in screen space, and an
@@ -508,6 +513,14 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
   const handleClick = (id: string) => (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation();
     const state = useProjectStore.getState();
+
+    // Tour is a guided, hands-off view (see TourControls.tsx's own
+    // header) — neither selecting an element nor starting a pin fits
+    // that, so a click during tour does nothing beyond the
+    // stopPropagation above (which still matters: it's what stops a
+    // tour-mode click from falling through to whatever's behind this
+    // mesh, same as any other click).
+    if (state.cameraMode === "tour") return;
 
     if (state.mode === "pin") {
       const group = outerGroupRef.current;
