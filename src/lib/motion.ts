@@ -493,7 +493,10 @@ function isExteriorElementName(name: string): boolean {
  * it through from Scene.tsx's own `extent.box`, the same value
  * WalkthroughControls.tsx already receives as its `bounds` prop for an
  * analogous reason (clamping a camera position against the model's real
- * extent).
+ * extent). `interiorCeilingY` is Scene.tsx's own `extent.ceilingY` — see
+ * that field's own comment for why it's measured off the "ceiling" mesh
+ * itself rather than derived from `modelBounds`, which only bounds the
+ * whole model *including* the roof void above the room.
  *
  * Uses the mesh's own Box3 (setFromObject), not a bounding sphere, to
  * measure the element itself: a box captures a long, thin element (a
@@ -578,16 +581,21 @@ function isExteriorElementName(name: string): boolean {
  * distances from the multiplier alone, and the floor/cap still keep both
  * ends of that continuum sane (see their own comments above for exactly
  * why each value was picked).
- * position.y is clamped a second time against modelBounds afterward
- * regardless of which branch ran; see ELEMENT_MAX_CEILING_RATIO's own
- * comment for why a fixed elevation component alone isn't sufficient for
- * large/tall elements specifically.
+ * position.y is clamped against modelBounds afterward regardless of which
+ * branch ran — see ELEMENT_MAX_CEILING_RATIO's own comment for why a
+ * fixed elevation component alone isn't sufficient for large/tall
+ * elements specifically — and, for a non-exterior element framed below
+ * the ceiling, clamped a second time against interiorCeilingY, tighter
+ * than the first clamp; see that parameter's own comment for the bug this
+ * fixes (a camera position that clears the whole-model clamp but still
+ * lands in the roof void, above the room's own real ceiling).
  */
 export function elementCameraTarget(
   mesh: THREE.Object3D,
   controls: OrbitControlsImpl,
   modelBounds: THREE.Box3,
   elementName: string,
+  interiorCeilingY: number,
 ): { target: THREE.Vector3; position: THREE.Vector3 } {
   const box = new THREE.Box3().setFromObject(mesh);
   const target = box.getCenter(new THREE.Vector3());
@@ -654,6 +662,27 @@ export function elementCameraTarget(
   const modelHeight = modelBounds.max.y - modelBounds.min.y;
   const ceilingY = modelBounds.max.y + modelHeight * ELEMENT_MAX_CEILING_RATIO;
   position.y = Math.min(position.y, ceilingY);
+
+  // A second, tighter clamp against the room's real interior ceiling —
+  // see interiorCeilingY's own comment in Scene.tsx (ModelExtent.ceilingY)
+  // for the bug this fixes: the clamp above bounds the camera against the
+  // *whole model's* roofline, which sits well above the room's actual
+  // ceiling (the gap is the roof void), so an interior element could still
+  // compute a camera position inside that void, looking down *through*
+  // the ceiling at whatever it was meant to frame — measured on "3-Seat
+  // Sofa, Living Area", whose camera landed at y≈1591 while every
+  // interior wall/ceiling mesh in this model tops out at y≈1557, well
+  // over the actual ceiling underside (≈1419). Skipped for an exterior-
+  // tagged element (frameFromExterior) — the envelope is legitimately
+  // framed from outside and above, where there is no ceiling to stay
+  // under — and for an element whose own target already sits at or above
+  // the ceiling (a ceiling or ceiling-bulkhead finish, mounted *in* the
+  // slab this field measures): for those, "stay below the ceiling" isn't
+  // a coherent constraint to begin with, and the whole-model clamp above
+  // is what already framed them correctly.
+  if (!frameFromExterior && target.y < interiorCeilingY) {
+    position.y = Math.min(position.y, interiorCeilingY - controls.minDistance);
+  }
 
   return { target, position };
 }

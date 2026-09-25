@@ -115,9 +115,18 @@ interface TourControlsProps {
    *  this fixes (a large structural element's camera position ending up
    *  well above the model's actual roofline). */
   bounds: THREE.Box3;
+  /** World-space Y of the interior ceiling's own underside — Scene.tsx's
+   *  `extent.ceilingY`, passed through to lib/motion's elementCameraTarget
+   *  so it can keep a *non-exterior* element's camera below the room's
+   *  real ceiling, not just below the whole model's own roofline (`bounds`
+   *  above). See that field's own comment in Scene.tsx for the bug this
+   *  fixes: a camera position computed only against the whole model's top
+   *  can land in the void between the room and the roof, looking down
+   *  through the ceiling at whatever it was meant to frame. */
+  interiorCeilingY: number;
 }
 
-export function TourControls({ bounds }: TourControlsProps) {
+export function TourControls({ bounds, interiorCeilingY }: TourControlsProps) {
   const camera = useThree((state) => state.camera);
   const invalidate = useThree((state) => state.invalidate);
   const gl = useThree((state) => state.gl);
@@ -175,7 +184,7 @@ export function TourControls({ bounds }: TourControlsProps) {
     // or "envelope" is exactly the right behavior for arbitrary
     // user-uploaded geometry with no real category data behind it.
     const elementName = "name" in element ? element.name : element.displayName;
-    const { target, position } = elementCameraTarget(mesh, controls, bounds, elementName);
+    const { target, position } = elementCameraTarget(mesh, controls, bounds, elementName, interiorCeilingY);
     const timeline = easeCameraTo(controls, camera, invalidate, target, position);
     // Killed, not left to finish, if tourIndex changes again mid-tween
     // (a fast double-click on Next, say) — the same cleanup
@@ -188,7 +197,7 @@ export function TourControls({ bounds }: TourControlsProps) {
     return () => {
       timeline.kill();
     };
-  }, [tourIndex, isMobile, camera, invalidate, bounds]);
+  }, [tourIndex, isMobile, camera, invalidate, bounds, interiorCeilingY]);
 
   // Wheel and vertical touch-swipe — the two Canvas-native inputs (see
   // file header; TourHud.tsx's buttons are the third, outside the

@@ -264,6 +264,21 @@ interface ModelExtent {
    *  height landing near ankle height instead of eye level — see that
    *  file's header for the full measured numbers. */
   floorY: number;
+  /** World-space Y of the interior ceiling's own *underside* — measured
+   *  directly off the "ceiling" mesh's own box.min.y, not its max.y or the
+   *  whole model's own box.max.y. The ceiling mesh is a real slab with
+   *  measurable thickness (unlike the floor's near-zero one): its min.y is
+   *  the surface a person standing in the room actually sees overhead, and
+   *  its max.y is the top of that slab, inside the void between the room
+   *  and the roof structure above it — camera positions computed against
+   *  the whole model's own box.max.y (as TourControls.tsx's flat-envelope
+   *  framing still legitimately does) can land in that void, *above* the
+   *  room's real ceiling, looking down through it at whatever's inside.
+   *  Falls back to the whole model's own box.max.y if no "ceiling" mesh is
+   *  found (a custom model, or the curated one missing it) — worse than
+   *  the real measurement, but the same permissive behaviour every
+   *  non-flat interior element already had before this field existed. */
+  ceilingY: number;
   /** Real-world metres per model unit, calibrated off the "interior-door"
    *  mesh's measured world-space height against DOOR_HEIGHT_METERS — the
    *  model's units were previously undocumented as unconvertible (see
@@ -360,7 +375,13 @@ function Model() {
     // whole fix exists to stop trusting) but strictly better than a crash.
     const floorY = floorBox && !floorBox.isEmpty() ? floorBox.min.y : box.min.y;
 
-    setExtent({ size, radius: sphere.radius, box: box.clone(), floorY, metersPerUnit });
+    const ceilingObject = useProjectStore.getState().getElementObject("ceiling");
+    const ceilingBox = ceilingObject ? new THREE.Box3().setFromObject(ceilingObject) : null;
+    // min.y, not max.y — see ModelExtent's own comment: the slab's
+    // underside is the surface that actually bounds the room, not its top.
+    const ceilingY = ceilingBox && !ceilingBox.isEmpty() ? ceilingBox.min.y : box.max.y;
+
+    setExtent({ size, radius: sphere.radius, box: box.clone(), floorY, ceilingY, metersPerUnit });
     invalidate();
     // customModelUrl is a real, deliberate dependency, not incidental —
     // see this file's own header for why both directions of switching
@@ -565,7 +586,7 @@ function Model() {
           elementCameraTarget — see that function's own comment for why
           it needs the model's real vertical extent, not just the
           per-element one, to frame a large structural element sanely. */}
-      {extent && cameraMode === "tour" && <TourControls bounds={extent.box} />}
+      {extent && cameraMode === "tour" && <TourControls bounds={extent.box} interiorCeilingY={extent.ceilingY} />}
     </>
   );
 }
