@@ -197,9 +197,10 @@
  * dedupes specifically to stop an *array* from growing a duplicate entry —
  * see mergeRemoteColorOverride's own comment for why copying that guard
  * here would just be dead code. For a custom model, setElementColor/
- * clearElementColor apply the same local Map write but stop there —
- * there is no Element row for an uploaded mesh to persist a color
- * override against.
+ * clearElementColor apply the same local Map write but stop there — see
+ * those actions' own comments for the explicit customModelUrl check that
+ * skips the Supabase half entirely, since there is no Element row for an
+ * uploaded mesh to persist a color override against.
  *
  * Live multi-reviewer sync (mergeRemoteAnnotation, mergeRemoteReply,
  * mergeRemoteColorOverride, mergeRemoteColorOverrideRemoved, remoteToast,
@@ -895,7 +896,13 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         return { elementColors: next };
       });
 
-      if (get().isDemoData) {
+      // Custom model: the local map write above is the whole feature —
+      // there is no Element row anywhere to persist a color override
+      // against (UploadedElement has no `id`; see its own comment), so
+      // this stops here deliberately rather than falling through to the
+      // curated-elements lookup below and relying on *that* coming up
+      // empty by coincidence.
+      if (get().isDemoData || get().customModelUrl) {
         return;
       }
 
@@ -940,7 +947,9 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         return { elementColors: next };
       });
 
-      if (get().isDemoData) {
+      // See setElementColor's own comment — same deliberate stop, same
+      // reason (no Element row to persist against for a custom model).
+      if (get().isDemoData || get().customModelUrl) {
         return;
       }
 
