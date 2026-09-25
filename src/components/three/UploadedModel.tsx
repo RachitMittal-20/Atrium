@@ -7,26 +7,25 @@
  * (51 hand-mapped entries, each with a category, a spec sheet row, color-
  * override support, visibility toggling) only ever makes sense against
  * the one apartment.glb it was built for. An arbitrary uploaded file has
- * none of that — no known mesh names, no Element rows, no Supabase
- * project to persist anything against — so this component instead
- * traverses whatever it's handed generically and supports only what
- * makes sense without any of that curated data: click to select, hover
- * to highlight, and Tour mode stepping through meshes in the file's own
+ * none of that up front — no known mesh names, no Element rows, no
+ * Supabase project to persist anything against — so this component
+ * traverses whatever it's handed generically and supports what a
+ * reviewer can assign *in-session*, via UploadedElementPanel.tsx: click
+ * to select, hover to highlight, rename + assign a category, recolor,
+ * hide/show, and Tour mode stepping through meshes in the file's own
  * scene-graph order. Scene.tsx mounts this in place of BuildingModel
  * (never alongside — see that file's header) whenever projectStore's
  * customModelUrl is set.
  *
- * No ElementPanel, no spec sheet, no name-only readout beyond the hover
- * label a click leaves selected (see below) — a deliberate "your call"
- * choice from the brief this was built against, picking the option that
- * reads least like a broken version of the curated panel rather than an
- * intentionally simpler one: ElementPanel.tsx's own selector
- * (`elements.find(candidate => candidate.meshName === selectedElementId)`)
- * already finds nothing for a custom-model selection automatically (see
- * projectStore.ts's own comment on reusing hoveredElementId/
- * selectedElementId for this), so that panel simply never opens — a
- * click here only ever shows the same brass Outline the curated model
- * uses for its own selection, with no panel sliding in behind it.
+ * No ElementPanel — UploadedElementPanel.tsx is its own, simpler sibling
+ * (mounted in src/app/project/page.tsx alongside this component, not
+ * here) rather than ElementPanel.tsx itself branching internally:
+ * ElementPanel's own `elements.find(candidate => candidate.meshName ===
+ * selectedElementId)` already finds nothing for a custom-model selection
+ * automatically (see projectStore.ts's own comment on reusing
+ * hoveredElementId/selectedElementId for this), so that panel simply
+ * never opens for this model — the brass Outline below is shared with
+ * the curated model's own selection effect, UploadedElementPanel is not.
  *
  * Loaded via the exact same useGLTF hook BuildingModel.tsx uses, just
  * against a dynamic object-URL instead of the build-time MODEL_PATH
@@ -40,23 +39,23 @@
  * The loaded `scene` is deep-cloned (`scene.clone(true)`) before
  * anything here touches it — that's drei's own cached, shared instance,
  * and this component mutates materials in place (hover/selection
- * emissive) the same way BuildingModel.tsx's per-mesh clones do.
- * Object3D.clone(true) deep-clones the *graph* (every mesh/group
- * wrapper) but, by three.js's own documented default, leaves geometry
- * and materials shared with the original — every mesh found below still
- * gets its own material cloned individually (geometry stays shared,
- * exactly as safe as BuildingModel's own geometry sharing, since nothing
- * here ever mutates a geometry).
+ * emissive, recolor, see below) the same way BuildingModel.tsx's per-mesh
+ * clones do. Object3D.clone(true) deep-clones the *graph* (every
+ * mesh/group wrapper) but, by three.js's own documented default, leaves
+ * geometry and materials shared with the original — every mesh found
+ * below still gets its own material cloned individually (geometry stays
+ * shared, exactly as safe as BuildingModel's own geometry sharing, since
+ * nothing here ever mutates a geometry).
  *
  * Traversal order is the file's own scene-graph order — there is no
  * curated grouping possible for an arbitrary upload the way
  * src/data/project.ts's ELEMENTS has, and this component doesn't
- * attempt to invent one. Each mesh's key (meshName below, what Tour mode
- * and the shared elementObjects registry both key off of) is mesh.name
- * when the exporter set one *and* it's unique across this file, else
- * mesh.uuid — a two-pass derivation (collect name frequencies, then
- * decide each key) because uniqueness can't be known from a single mesh
- * in isolation.
+ * attempt to invent one. Each mesh's key (meshName below, what Tour mode,
+ * Hide/Show, recolor, and the shared elementObjects registry all key off
+ * of) is mesh.name when the exporter set one *and* it's unique across
+ * this file, else mesh.uuid — a two-pass derivation (collect name
+ * frequencies, then decide each key) because uniqueness can't be known
+ * from a single mesh in isolation.
  *
  * One set of pointer handlers on the whole traversed scene, not one per
  * mesh the way BuildingModel.tsx's individually-named JSX entries have —
@@ -69,21 +68,40 @@
  * BuildingModel's per-entry approach for content that has no per-entry
  * metadata to justify it.
  *
- * Hover glow only ever touches MeshStandardMaterial/MeshPhysicalMaterial
- * instances (the only ones with an `.emissive` channel) — which is what
- * GLTFLoader actually produces for an ordinary glTF PBR metallic-
+ * Hover glow and recolor both only ever touch
+ * MeshStandardMaterial/MeshPhysicalMaterial instances (the only ones with
+ * an `.emissive`/`.color` channel in the way this code expects) — which
+ * is what GLTFLoader actually produces for an ordinary glTF PBR metallic-
  * roughness material, so this covers the overwhelming majority of real
  * .glb/.gltf files; anything else (an unusual export path producing a
- * MeshBasicMaterial, say) simply never glows on hover instead of
- * crashing trying to set a property that doesn't exist.
+ * MeshBasicMaterial, say) simply never glows on hover or accepts a
+ * recolor instead of crashing trying to set a property that doesn't
+ * exist.
  *
- * No pin-mode branch at all, unlike BuildingModel.tsx's own click
- * handler — pinning a comment persists an Annotation row tied to a real
- * Element in a real project (src/lib/queries.ts's createAnnotation),
- * which has no meaning for an ephemeral, unpersisted custom model. A
- * click here always just selects, regardless of projectStore's `mode` —
- * if the reviewer happens to still be in pin mode from viewing the
- * curated model, clicking a custom-model mesh selects it instead of
+ * Hide/show: hiding has to make a mesh both invisible *and* un-hittable
+ * — three.js raycasting ignores `visible` entirely, so a hidden mesh
+ * left with its default raycast would still swallow clicks meant for
+ * whatever's behind it. MESH_RAYCAST/NO_RAYCAST below are the same pair
+ * BuildingModel.tsx's own file already uses for the identical reason,
+ * restated here rather than imported since three.js's own
+ * Mesh.prototype.raycast is a stable, cheap-to-restate module value, not
+ * something worth a cross-file coupling over.
+ *
+ * Recolor: baseColors captures each mesh's material color *as cloned*
+ * (its real, original color) once per mesh, the same "cheap Color clone
+ * kept alongside the clone that will actually get mutated" pattern
+ * BuildingModel.tsx's own baseColors follows — elementColors overrides
+ * are always relative to this, never to whatever the color happened to
+ * be the last time the effect ran, so removing an override (Reset to
+ * original) always lands back on the model's real starting color.
+ *
+ * Still no pin-mode branch — pinning a comment against a custom model is
+ * a separate, not-yet-built piece of work (it needs its own ephemeral
+ * annotation state, entirely apart from the curated model's Supabase-
+ * backed `annotations`), tracked separately rather than half-wired in
+ * here. A click always just selects, regardless of projectStore's
+ * `mode` — if the reviewer happens to still be in pin mode from viewing
+ * the curated model, clicking a custom-model mesh selects it instead of
  * silently doing nothing, which reads as "this still works," not
  * "pinning quietly failed."
  */
@@ -114,6 +132,11 @@ const BRASS_DIM = "#5A4322";
 // range of unknown material brightness/color than that measured value
 // would, at the cost of not being tuned to any one file in particular.
 const HOVER_EMISSIVE_INTENSITY = 0.35;
+
+// See file header ("Hide/show") — the same pair BuildingModel.tsx's own
+// file restates for the identical reason.
+const MESH_RAYCAST = THREE.Mesh.prototype.raycast;
+const NO_RAYCAST = () => {};
 
 function forEachMaterial(material: THREE.Material | THREE.Material[], fn: (material: THREE.Material) => void) {
   if (Array.isArray(material)) {
@@ -153,16 +176,24 @@ export function UploadedModel({ url }: UploadedModelProps) {
   const clearHovered = useProjectStore((state) => state.clearHovered);
   const setSelected = useProjectStore((state) => state.setSelected);
   const setUploadedElements = useProjectStore((state) => state.setUploadedElements);
+  // A new Set/Map reference on every change (see projectStore.ts's own
+  // comment on both), so this re-renders exactly when a hide/recolor
+  // actually happens — the same selector shape BuildingModel.tsx uses
+  // for its own identical reads.
+  const hiddenElementIds = useProjectStore((state) => state.hiddenElementIds);
+  const elementColors = useProjectStore((state) => state.elementColors);
 
   // See file header for why this clone exists and why materials (not
   // geometry) get individually cloned again inside it below.
   const clonedScene = useMemo(() => scene.clone(true), [scene]);
 
   // One pass over the cloned graph: finds every THREE.Mesh, clones its
-  // material(s) so hover/selection can freely mutate them without
-  // touching the cached original, and derives each mesh's key — see file
-  // header for the name-if-unique-else-uuid rule this follows.
-  const { meshes, elements } = useMemo(() => {
+  // material(s) so hover/selection/recolor can freely mutate them without
+  // touching the cached original, captures each one's real starting color
+  // (baseColors, for recolor's own "Reset to original"), and derives each
+  // mesh's key — see file header for the name-if-unique-else-uuid rule
+  // this follows.
+  const { meshes, elements, baseColors } = useMemo(() => {
     const found: THREE.Mesh[] = [];
     clonedScene.traverse((object) => {
       if (object instanceof THREE.Mesh) found.push(object);
@@ -173,6 +204,8 @@ export function UploadedModel({ url }: UploadedModelProps) {
       if (!mesh.name) continue;
       nameCounts.set(mesh.name, (nameCounts.get(mesh.name) ?? 0) + 1);
     }
+
+    const colors: Record<string, THREE.Color> = {};
 
     const derivedElements: UploadedElement[] = found.map((mesh, index) => {
       const meshName = mesh.name && nameCounts.get(mesh.name) === 1 ? mesh.name : mesh.uuid;
@@ -188,8 +221,8 @@ export function UploadedModel({ url }: UploadedModelProps) {
       // meshMaterials clone does: two meshes could share one source
       // material (a "metal" or "fabric" material reused across several
       // parts of the file is common), and mutating a shared material's
-      // emissive on hover would light every mesh using it up together,
-      // not just the one under the pointer.
+      // emissive/color on hover/recolor would light or repaint every
+      // mesh using it together, not just the one under the pointer.
       const material = Array.isArray(mesh.material) ? mesh.material.map((m) => m.clone()) : mesh.material.clone();
       forEachMaterial(material, (m) => {
         if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial) {
@@ -199,10 +232,25 @@ export function UploadedModel({ url }: UploadedModelProps) {
       });
       mesh.material = material;
 
-      return { meshName, displayName };
+      // One representative color per mesh (the first color-capable
+      // material, if any) — mirrors BuildingModel.tsx's own baseColors
+      // exactly, including only ever tracking one channel even for a
+      // multi-material mesh, since setElementColor's own write (below)
+      // only ever sets one color too.
+      const firstColorMaterial = Array.isArray(material)
+        ? material.find((m) => m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshPhysicalMaterial)
+        : material;
+      if (
+        firstColorMaterial instanceof THREE.MeshStandardMaterial ||
+        firstColorMaterial instanceof THREE.MeshPhysicalMaterial
+      ) {
+        colors[meshName] = firstColorMaterial.color.clone();
+      }
+
+      return { meshName, displayName, category: null };
     });
 
-    return { meshes: found, elements: derivedElements };
+    return { meshes: found, elements: derivedElements, baseColors: colors };
   }, [clonedScene]);
 
   // Registers every mesh into the exact same shared registry
@@ -212,7 +260,11 @@ export function UploadedModel({ url }: UploadedModelProps) {
   // the derived element list for TourControls.tsx/TourHud.tsx to read.
   // A store write, so this belongs in an effect, never the useMemo above
   // — see ProjectHydrator.tsx's header for the long version of why this
-  // codebase never writes to the store during render.
+  // codebase never writes to the store during render. Only runs once per
+  // traversal (a fresh model load), so it never stomps a reviewer's own
+  // rename/category edit — see renameUploadedElement's own comment in
+  // projectStore.ts for why that's a targeted update, not a call back
+  // into setUploadedElements from the panel itself.
   useEffect(() => {
     const state = useProjectStore.getState();
     for (const mesh of meshes) {
@@ -234,6 +286,51 @@ export function UploadedModel({ url }: UploadedModelProps) {
       }
     };
   }, [meshes]);
+
+  // Hide/show — see file header. Only ever pulls a mesh's own
+  // visible/raycast pair toward what hiddenElementIds currently says;
+  // never touches emissive/color, which the two effects below already
+  // own independently. `meshes` holds real three.js Object3D instances,
+  // not React-owned state — mutating `.visible`/`.raycast` on them
+  // directly is the normal, correct r3f pattern for driving an
+  // imperative scene graph from reactive state, the same reasoning
+  // Scene.tsx's own blanket disable comment gives for mutating `camera`
+  // the identical way; the compiler-oriented lint rule doesn't
+  // distinguish a three.js object living inside a memoized array from
+  // React-owned data the way it does a plain prop.
+  /* eslint-disable react-hooks/immutability */
+  useEffect(() => {
+    for (const mesh of meshes) {
+      const meshName = mesh.userData.meshName as string;
+      const hidden = hiddenElementIds.has(meshName);
+      mesh.visible = !hidden;
+      mesh.raycast = hidden ? NO_RAYCAST : MESH_RAYCAST;
+    }
+    invalidate();
+  }, [meshes, hiddenElementIds, invalidate]);
+  /* eslint-enable react-hooks/immutability */
+
+  // Recolor — see file header. Same "override present -> set; else ->
+  // restore baseColors" shape as BuildingModel.tsx's own identical
+  // effect, just addressed by meshName (this component's own key)
+  // instead of MESH_ENTRIES' id.
+  useEffect(() => {
+    for (const mesh of meshes) {
+      const meshName = mesh.userData.meshName as string;
+      const base = baseColors[meshName];
+      if (!base) continue;
+      const override = elementColors.get(meshName);
+      forEachMaterial(mesh.material, (material) => {
+        if (!(material instanceof THREE.MeshStandardMaterial) && !(material instanceof THREE.MeshPhysicalMaterial)) return;
+        if (override) {
+          material.color.set(override);
+        } else {
+          material.color.copy(base);
+        }
+      });
+    }
+    invalidate();
+  }, [meshes, baseColors, elementColors, invalidate]);
 
   const handlePointerOver = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -295,16 +392,23 @@ export function UploadedModel({ url }: UploadedModelProps) {
 
   useEffect(() => {
     invalidate();
-  }, [hoveredElementId, selectedElementId, invalidate]);
+  }, [hoveredElementId, selectedElementId, hiddenElementIds, invalidate]);
+
+  // A hidden selection keeps UploadedElementPanel.tsx open (so its Hide
+  // button can flip to Show) but loses its outline — same reasoning as
+  // BuildingModel.tsx's own outlineObject: nothing on screen left to draw
+  // it around, and xRay would otherwise risk tracing a ghost of it.
+  const outlineObject =
+    selectedObject && selectedElementId && !hiddenElementIds.has(selectedElementId) ? selectedObject : null;
 
   return (
     <>
       <primitive object={clonedScene} onPointerOver={handlePointerOver} onPointerOut={handlePointerOut} onClick={handleClick} />
 
-      {selectedObject && (
+      {outlineObject && (
         <EffectComposer autoClear={false}>
           <Outline
-            selection={[selectedObject]}
+            selection={[outlineObject]}
             visibleEdgeColor={BRASS}
             hiddenEdgeColor={BRASS_DIM}
             edgeStrength={2.5}

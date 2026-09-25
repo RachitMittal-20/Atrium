@@ -111,26 +111,36 @@
  * — a completely separate, parallel path from BuildingModel.tsx's
  * curated MESH_ENTRIES rendering, not a rewrite of it. Scene.tsx reads
  * customModelUrl to decide which of the two model components to mount
- * (never both). This is explicitly scoped down and says so in the UI:
- * no persistence, no Supabase, no categories/spec sheets/color
- * overrides/annotations for an uploaded model — it's a live, in-memory
- * preview only, gone the moment the tab closes or a new file replaces
- * it. uploadedElements is that model's own equivalent of `elements` —
- * a { meshName, displayName } entry per mesh UploadedModel.tsx finds by
- * traversing the loaded scene, in the GLB's own scene-graph order (there
- * is no curated grouping possible for an arbitrary file the way
- * ELEMENTS has) — TourControls.tsx and TourHud.tsx both read whichever
- * of `elements`/uploadedElements is actually active (customModelUrl set
- * or not) rather than either one unconditionally, and tourNext/tourPrev/
- * tourGoTo clamp against activeTourCount() below for the same reason.
- * hoveredElementId/selectedElementId are reused as-is for a custom
- * model's own mesh keys (mesh.uuid or a unique mesh.name — see
- * UploadedModel.tsx) rather than given a second, parallel pair of
- * fields: only one model is ever mounted at a time, so the two id
- * spaces never need to coexist, and ElementPanel.tsx's own `elements`
- * lookup simply finds nothing for a custom-model key and stays closed
- * (see UploadedModel.tsx's header for why "selection highlight, no
- * panel" was the deliberate choice there). customEyeHeightMeters backs
+ * (never both). This is explicitly scoped down and still says so in the
+ * UI: no persistence, no Supabase, no spec sheets/pinned annotations for
+ * an uploaded model — it's a live, in-memory preview only, gone the
+ * moment the tab closes or a new file replaces it. Hide/Show and recolor
+ * *are* now supported (see UploadedElementPanel.tsx), entirely locally —
+ * category and displayName are the two fields a reviewer can assign
+ * in-session (renameUploadedElement below), and Hide/Show, recolor, and
+ * Tour mode all key off the exact same uploadedElements entries that
+ * assignment lives on, the same way every curated-model feature keys off
+ * one shared `elements` array rather than several parallel copies.
+ * uploadedElements is that model's own equivalent of `elements` — a
+ * { meshName, displayName, category } entry per mesh UploadedModel.tsx
+ * finds by traversing the loaded scene, in the GLB's own scene-graph
+ * order (there is no curated grouping possible for an arbitrary file the
+ * way ELEMENTS has) — TourControls.tsx and TourHud.tsx both read
+ * whichever of `elements`/uploadedElements is actually active
+ * (customModelUrl set or not) rather than either one unconditionally,
+ * and tourNext/tourPrev/tourGoTo clamp against activeTourCount() below
+ * for the same reason. hoveredElementId/selectedElementId are reused
+ * as-is for a custom model's own mesh keys (mesh.uuid or a unique
+ * mesh.name — see UploadedModel.tsx) rather than given a second,
+ * parallel pair of fields: only one model is ever mounted at a time, so
+ * the two id spaces never need to coexist. ElementPanel.tsx's own
+ * `elements` lookup still finds nothing for a custom-model key and stays
+ * closed — UploadedElementPanel.tsx is the parallel panel that opens for
+ * *that* selection instead, reading uploadedElements rather than
+ * `elements` (see its own header for why it's a separate, simpler
+ * component rather than ElementPanel.tsx branching internally: an
+ * UploadedElement has none of Element's spec/status/history fields to
+ * branch around). customEyeHeightMeters backs
  * the manual eye-height slider CustomModelControl.tsx shows only for a
  * custom model in walkthrough — see Scene.tsx's header for why an
  * uploaded model can't reuse the curated model's door-height
@@ -155,19 +165,28 @@
  * stored separately — it's always derived from this one set (a category
  * is "hidden" when every element in it is), so a category chip and a
  * per-element hide can never disagree about the same mesh. Purely
- * client-side for now: nothing here is persisted or synced over realtime.
+ * client-side: nothing here is ever persisted or synced over realtime —
+ * true for the curated model always, and true for an uploaded model too
+ * (see below), just for a different reason each time. Reused as-is for
+ * an uploaded model's own meshNames once UploadedElementPanel.tsx exists
+ * to write to it (toggleElementVisibility already only ever needed a
+ * plain meshName string, never an Element record); reset to empty on
+ * every model switch by CUSTOM_MODEL_RESET, for the same "nothing stale
+ * leaks across models" reason everything else there is.
  *
  * `elementColors` is element recoloring — a Map from meshName to the hex
  * color currently applied, read by BuildingModel.tsx to tint that mesh's
  * cloned material (see that file's own comment on why cloning per mesh
- * makes this safe). Keyed by meshName rather than Element.id, unlike the
- * database table backing it (see ElementColorOverride's own comment in
+ * makes this safe) and by UploadedElementPanel.tsx/UploadedModel.tsx the
+ * identical way for a custom model. Keyed by meshName rather than
+ * Element.id, unlike the database table backing the *curated* model's
+ * overrides (see ElementColorOverride's own comment in
  * src/types/project.ts) — that's purely for BuildingModel's convenience,
  * since a mesh only ever knows its own id, not the Element row it maps
  * to; setElementColor/clearElementColor and the mergeRemote* actions
  * below all do the meshName<->elementId conversion via `elements`
- * internally, so nothing outside this store ever has to. Unlike
- * hiddenElementIds, this genuinely does persist and sync: setElementColor/
+ * internally, so nothing outside this store ever has to. For the curated
+ * model this genuinely does persist and sync: setElementColor/
  * clearElementColor follow the *exact* optimistic-write-then-reconcile
  * shape pinAnnotation does (apply locally first, persist after, roll back
  * and offer Retry on failure — see setElementColor's own comment for the
@@ -177,7 +196,10 @@
  * under a repeated set() to the same key/value, where mergeRemoteAnnotation
  * dedupes specifically to stop an *array* from growing a duplicate entry —
  * see mergeRemoteColorOverride's own comment for why copying that guard
- * here would just be dead code.
+ * here would just be dead code. For a custom model, setElementColor/
+ * clearElementColor apply the same local Map write but stop there —
+ * there is no Element row for an uploaded mesh to persist a color
+ * override against.
  *
  * Live multi-reviewer sync (mergeRemoteAnnotation, mergeRemoteReply,
  * mergeRemoteColorOverride, mergeRemoteColorOverrideRemoved, remoteToast,
@@ -267,9 +289,21 @@ export interface UploadedElement {
    *  derivation and why uuid is the safe fallback. */
   meshName: string;
   /** A human-readable label for TourHud.tsx's readout — mesh.name if the
-   *  exporter set one, else a positional fallback ("Mesh 3") so this is
-   *  never blank. */
+   *  exporter set one, else a positional fallback ("Mesh 3"), until a
+   *  reviewer renames it via UploadedElementPanel.tsx (renameUploadedElement
+   *  below) — never blank either way. */
   displayName: string;
+  /** Assigned by a reviewer via UploadedElementPanel.tsx, reusing the
+   *  same ElementCategory union the curated schedule uses (not a second,
+   *  parallel category system) — that's what lets VisibilityToolbar.tsx's
+   *  existing per-category toggling apply to an uploaded model too, once
+   *  enough elements have one. Null until assigned: an upload's meshes
+   *  start with no known category (there is no schedule to read one from
+   *  the way the curated model has), and null is what
+   *  toggleCategoryVisibility's own filter already treats as "not in this
+   *  category," not a sixth pseudo-category needing its own handling
+   *  anywhere else. */
+  category: ElementCategory | null;
 }
 
 export interface HydrationData {
@@ -476,6 +510,17 @@ interface ProjectState {
    *  and traverses (never during render — see UploadedModel.tsx). */
   uploadedElements: UploadedElement[];
   setUploadedElements: (elements: UploadedElement[]) => void;
+  /** UploadedElementPanel.tsx's write path — updates one uploaded
+   *  element's displayName and/or category in place, by meshName. A
+   *  plain array `.map()`, not a second call to setUploadedElements from
+   *  the panel itself: UploadedModel.tsx's own mount effect is the only
+   *  thing that should ever *replace* the whole array (a fresh
+   *  traversal), so a rename goes through its own targeted action instead
+   *  of the panel having to reconstruct and pass back the entire list
+   *  (and risk racing that mount effect if the model happens to reload).
+   *  No-ops silently if meshName isn't found — defensive only; every real
+   *  caller reads meshName from an UploadedElement already in the array. */
+  renameUploadedElement: (meshName: string, updates: Partial<Pick<UploadedElement, "displayName" | "category">>) => void;
   /** The manual eye-height override (real metres) CustomModelControl.tsx's
    *  slider drives, read by WalkthroughControls.tsx's
    *  eyeHeightMetersOverride prop in place of that file's own fixed
@@ -689,6 +734,16 @@ const CUSTOM_MODEL_RESET = {
   tourIndex: 0,
   cameraMode: "orbit",
   customEyeHeightMeters: 1.65,
+  // Now that Hide/Show and recolor both work against an uploaded model's
+  // own meshNames (see UploadedElement's own comment), these two need
+  // resetting on every model switch for the exact same "nothing stale
+  // leaks across models" reason every other field here already is —
+  // meshNames from a previous upload (or the curated model) mean nothing
+  // against a newly-loaded scene's own mesh keys, and an unlucky exact
+  // string match (two different files both naming a mesh "Cube", say)
+  // would otherwise hide or recolor the wrong thing on the new model.
+  hiddenElementIds: new Set<string>(),
+  elementColors: new Map<string, string>(),
 } as const satisfies Partial<ProjectState>;
 
 export const useProjectStore = create<ProjectState>((set, get) => {
@@ -971,6 +1026,12 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     customModelName: null,
     uploadedElements: [],
     setUploadedElements: (elements) => set({ uploadedElements: elements }),
+    renameUploadedElement: (meshName, updates) =>
+      set((state) => ({
+        uploadedElements: state.uploadedElements.map((element) =>
+          element.meshName === meshName ? { ...element, ...updates } : element,
+        ),
+      })),
     customEyeHeightMeters: 1.65,
     setCustomEyeHeightMeters: (meters) => set({ customEyeHeightMeters: meters }),
     setCustomModel: (url, name) =>

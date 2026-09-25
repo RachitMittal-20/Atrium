@@ -17,6 +17,12 @@
  * instead, the other corner with room to spare — it renders nothing at
  * all unless a custom model is already active (the "try your own model"
  * trigger itself lives on the landing screen now, see its own header).
+ * ElementPanel and UploadedElementPanel are mounted side by side, not
+ * behind a customModelUrl branch here: each one's own internal lookup
+ * (`elements` vs. `uploadedElements`) already finds nothing for the
+ * other model's selection and stays closed, so at most one is ever open
+ * regardless of which model is mounted — see UploadedElementPanel.tsx's
+ * own header.
  *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark
@@ -43,6 +49,7 @@ import { Scene } from "@/components/three/Scene";
 import { SceneLoader } from "@/components/three/SceneLoader";
 import { Label } from "@/components/ui/Label";
 import { ElementPanel } from "@/components/ui/ElementPanel";
+import { UploadedElementPanel } from "@/components/ui/UploadedElementPanel";
 import { ModeIndicator } from "@/components/ui/ModeIndicator";
 import { PresenceIndicator } from "@/components/ui/PresenceIndicator";
 import { CameraModeToggle } from "@/components/ui/CameraModeToggle";
@@ -118,6 +125,7 @@ export default async function ProjectPage() {
         <CustomModelControl />
         <ReviewList />
         <ElementPanel />
+        <UploadedElementPanel />
         <DemoDataBadge />
         <Toast />
         <RemoteCommentToast />
