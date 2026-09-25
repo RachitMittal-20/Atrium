@@ -863,9 +863,15 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       }),
     toggleCategoryVisibility: (category) =>
       set((state) => {
-        const meshNames = state.elements
-          .filter((element) => element.category === category)
-          .map((element) => element.meshName);
+        // Whichever list is actually active — same customModelUrl branch
+        // activeTourCount above already uses for the identical reason: a
+        // category chip has to toggle the meshes actually on screen, and
+        // an uploaded model's own elements are never in `elements`.
+        // UploadedElement.category defaults to null until a reviewer
+        // assigns one via UploadedElementPanel.tsx, so an unnamed upload
+        // correctly toggles nothing here rather than matching everything.
+        const source = state.customModelUrl ? state.uploadedElements : state.elements;
+        const meshNames = source.filter((element) => element.category === category).map((element) => element.meshName);
         const allHidden = meshNames.every((meshName) => state.hiddenElementIds.has(meshName));
         const hidden = new Set(state.hiddenElementIds);
         for (const meshName of meshNames) {

@@ -12,14 +12,15 @@
  * Everything goes through projectStore, never through a reference to the
  * scene: each chip calls toggleCategoryVisibility, Reset calls
  * resetVisibility, and both write hiddenElementIds — which
- * BuildingModel.tsx reads on the other side of the Canvas boundary to
- * flip each mesh's `visible` and switch off its raycast. This component
- * never touches a three.js object; it doesn't need the viewport bridge at
- * all.
+ * BuildingModel.tsx/UploadedModel.tsx each read on the other side of the
+ * Canvas boundary to flip a mesh's `visible` and switch off its raycast.
+ * This component never touches a three.js object; it doesn't need the
+ * viewport bridge at all.
  *
  * Each chip's state is derived, not stored: a category's visible/total
- * count is recomputed from `elements` and `hiddenElementIds`, so hiding a
- * single sofa from ElementPanel.tsx shows up here immediately as
+ * count is recomputed from whichever of `elements`/`uploadedElements` is
+ * actually active and `hiddenElementIds`, so hiding a single sofa from
+ * ElementPanel.tsx/UploadedElementPanel.tsx shows up here immediately as
  * "Furniture 9/10" without any extra bookkeeping. A chip reads as "on"
  * (brass, like CameraModeToggle's selected option and ReviewList's active
  * filter) while *any* of its elements are showing, and "off" (faint,
@@ -40,14 +41,18 @@
  * opens on the right, or a mobile bottom sheet slides up, it simply sits
  * underneath rather than competing with them.
  *
- * Hidden entirely while a custom uploaded model is active (projectStore's
- * customModelUrl set): every chip here toggles visibility on the
- * *curated* schedule's categories, which aren't even the meshes on
- * screen once a custom model has replaced BuildingModel.tsx — showing it
- * then wouldn't merely do nothing, it would show controls that visibly
- * refer to a different model than the one in view. See
- * CustomModelControl.tsx for the "try your own model" feature this
- * yields to.
+ * A custom uploaded model reads from `uploadedElements` instead of the
+ * curated `elements`, the same customModelUrl branch every other
+ * category-aware piece of this store takes (toggleCategoryVisibility
+ * itself, activeTourCount) — this toolbar used to hide itself entirely
+ * for a custom model, back when UploadedElement had no category field at
+ * all to derive counts from (every chip would have shown 0/0 against
+ * meshes that were genuinely on screen, reading as broken rather than
+ * simply empty). Now that UploadedElementPanel.tsx lets a reviewer assign
+ * one, this toolbar works the same way it always has — an element with no
+ * category assigned yet (UploadedElement.category still null) simply
+ * isn't counted in any chip's total, the same as it wouldn't be if it
+ * didn't exist, until it's given one.
  */
 "use client";
 
@@ -62,31 +67,32 @@ interface CategoryCount {
 
 export function VisibilityToolbar() {
   const elements = useProjectStore((state) => state.elements);
+  const uploadedElements = useProjectStore((state) => state.uploadedElements);
   const hiddenElementIds = useProjectStore((state) => state.hiddenElementIds);
   const toggleCategoryVisibility = useProjectStore((state) => state.toggleCategoryVisibility);
   const resetVisibility = useProjectStore((state) => state.resetVisibility);
   const customModelUrl = useProjectStore((state) => state.customModelUrl);
 
   // Visible/total per category, derived fresh from the store every time
-  // either input changes — see file header for why this is never stored.
+  // any input changes — see file header for why this is never stored.
+  // Whichever list is actually active — see file header on why an
+  // uploaded element without a category assigned yet is correctly
+  // uncounted here, not shown as some sixth "uncategorized" chip.
   const counts = useMemo(() => {
     const result = Object.fromEntries(
       ELEMENT_CATEGORIES.map((category) => [category, { visible: 0, total: 0 }]),
     ) as Record<ElementCategory, CategoryCount>;
-    for (const element of elements) {
+    const source = customModelUrl ? uploadedElements : elements;
+    for (const element of source) {
+      if (!element.category) continue;
       const count = result[element.category];
       count.total += 1;
       if (!hiddenElementIds.has(element.meshName)) count.visible += 1;
     }
     return result;
-  }, [elements, hiddenElementIds]);
+  }, [customModelUrl, elements, uploadedElements, hiddenElementIds]);
 
   const nothingHidden = hiddenElementIds.size === 0;
-
-  // See file header — the curated categories this toolbar controls
-  // aren't meaningful against whatever's actually on screen once a
-  // custom model has replaced BuildingModel.tsx.
-  if (customModelUrl) return null;
 
   return (
     <div
