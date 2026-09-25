@@ -221,42 +221,65 @@ const ELEMENT_VIEW_ELEVATION = 0.6;
 // before rather than element-awareness silently redirecting every shot.
 const ELEMENT_VIEW_FALLBACK_BEARING = new THREE.Vector2(1, 1).normalize();
 
+// How much thinner a flat element's shorter horizontal (X or Z) dimension
+// has to be than its longer horizontal dimension before flatElementAxis
+// (below) treats it as a wall/door/panel rather than a chunky object.
+// Found by measurement, not guessed, against every element in the curated
+// model: real walls, doors, and panels measure well under this ratio (a
+// door's own 87-unit thickness against a 1286-unit width, for instance),
+// while every roughly-square-in-plan element (a kitchen countertop, the
+// floor, the ceiling, a media console) measures well over it — the two
+// groups aren't close on the real data, so 0.3 sits with comfortable
+// headroom on both sides rather than against a knife-edge case.
+const FLAT_ELEMENT_ASPECT_RATIO = 0.3;
+
 /**
- * The horizontal (XZ) half of elementCameraTarget's view direction —
- * split into its own function because it's the one part of the direction
- * that needs to know anything about the element's *position*, not just
- * its size. The vertical half (ELEVATION_ratio above) never changes: only
- * the compass bearing does.
+ * The horizontal (XZ) half of elementCameraTarget's view direction, for
+ * elements flatElementAxis (below) does *not* flag as a wall/door/panel
+ * — furniture, countertops, and anything else roughly chunky rather than
+ * flat. Split into its own function because it's the one part of the
+ * direction that needs to know anything about the element's *position*,
+ * not just its size. The vertical half (ELEVATION_ratio above) never
+ * changes: only the compass bearing does.
  *
- * The bug this fixes (found the same way as the ceiling clamp above — by
- * screenshotting real tour steps, not guessing): a single fixed bearing
- * for every element frequently put the camera on the *outside* of a
- * perimeter wall, window, or door, looking back in at its exterior face,
- * because the bearing never accounted for which side of the building the
- * element was actually on.
+ * This used to be the *only* view-direction logic elementCameraTarget
+ * had, and on its own it's still wrong for exactly the case
+ * flatElementAxis now intercepts first: comparing an element's *position*
+ * to the model's centre is a reasonable proxy for "is this near the
+ * perimeter," but it has no relationship to which way a flat element's
+ * own face actually points — a wall or door can be oriented any which
+ * way regardless of where it sits in the floor plan, so a
+ * position-derived bearing can land in-plane with the surface instead of
+ * perpendicular to it (an edge-on sliver, not a view of the face). That
+ * failure mode simply didn't show up on the handful of elements this
+ * function was first verified against, by chance of their orientation —
+ * see flatElementAxis's own comment for the shape-based fix, and
+ * elementCameraTarget's for why *this* function still owns every element
+ * that fix doesn't claim.
  *
- * The fix: compare the element's own horizontal centre to the *model's*
- * own horizontal centre (modelBounds — the same whole-model box the
- * ceiling clamp above already needs). The vector from the model's centre
- * out to the element points roughly "outward," toward whichever side of
- * the building that element sits on; negating it gives "inward" — the
- * side the camera should stand on so it's looking at the element from
- * inside the envelope, the same side a reviewer would actually be
- * standing on to look at that wall or window in the real apartment.
+ * For the elements this function *does* still own, the position-based
+ * approach is the right one: a freestanding sofa or countertop has no
+ * single "correct" face the way a wall does, so there's nothing more
+ * meaningful to aim at than "generally toward the middle of the room,"
+ * which is exactly what comparing centre-to-centre gives you. Compares
+ * the element's own horizontal centre to the *model's* own horizontal
+ * centre (modelBounds — the same whole-model box the ceiling clamp above
+ * already needs). The vector from the model's centre out to the element
+ * points roughly "outward," toward whichever side of the building that
+ * element sits on; negating it gives "inward" — the side the camera
+ * should stand on so it's looking at the element from inside the
+ * envelope, the same side a reviewer would actually be standing on to
+ * look at that piece of furniture in the real apartment.
  *
  * Blended with ELEMENT_VIEW_FALLBACK_BEARING, not used outright, by how
  * far the element's centre actually sits from the model's own centre
  * (`proximity`, 0 at dead centre, 1 at or beyond the model's own
  * horizontal half-diagonal): an element right at the model's own centre
  * has a near-zero, directionless "outward" vector — there's no
- * meaningful "which side of the building" answer for it, the same reason
- * "inside vs outside" isn't meaningful for the building shell itself
- * (whose own horizontal centre, being the outer envelope, naturally
- * coincides with the model's — this formula already produces
- * `proximity ≈ 0` for it without any separate special case, falling back
- * to the same fixed bearing that already framed it correctly, verified
- * by screenshot). Perimeter elements (proximity near 1) get the computed
- * inward bearing almost outright; everything between blends smoothly.
+ * meaningful "which side of the building" answer for it. Centred
+ * furniture (proximity near 0) keeps the fixed fallback bearing almost
+ * outright; a piece further out blends smoothly toward the computed
+ * inward bearing.
  */
 function elementViewBearing(target: THREE.Vector3, modelBounds: THREE.Box3): THREE.Vector2 {
   const modelCenterX = (modelBounds.min.x + modelBounds.max.x) / 2;
@@ -298,6 +321,68 @@ function elementViewBearing(target: THREE.Vector3, modelBounds: THREE.Box3): THR
 }
 
 /**
+ * Detects whether an element's own shape — not its position — marks it as
+ * a wall, door, or flat panel, and if so, which world axis is its surface
+ * normal. `size` is the element's own Box3 size (box.getSize()), already
+ * computed once by elementCameraTarget and passed in rather than
+ * recomputed here.
+ *
+ * The bug this fixes (found the same way every fix in this function has
+ * been — by screenshotting real tour steps, not guessing): elementViewBearing
+ * above picks a direction from the element's *position* relative to the
+ * model's centre, which is a fine proxy for "which side of the building is
+ * this on" but has no relationship to which way a flat surface's own face
+ * actually points. A wall or door can be oriented any which way regardless
+ * of where it sits in the floor plan, so a position-derived bearing can
+ * easily land in-plane with the surface instead of perpendicular to
+ * it — an edge-on sliver, not a view of the face. Four elements verified
+ * on the first pass of this fix (a facade wall, both windows, a kitchen
+ * countertop) happened to be oriented in a way the position-based bearing
+ * got right; a second pass of real screenshots against different wall/door
+ * elements ("Accent Wall Panel," "Interior Door, Study") caught the actual
+ * failure.
+ *
+ * The fix: compare the two *horizontal* (X, Z) dimensions only — never Y —
+ * and flag the element as flat if the shorter of the two is a small enough
+ * fraction of the longer one. Only X and Z are ever candidates for the
+ * thin axis, deliberately: a first version of this function also compared
+ * the candidate thin dimension against the element's own height, on the
+ * theory that a countertop or floor slab (dramatically thin in Y, its own
+ * slab thickness) needed that second comparison to stay excluded. Logging
+ * every curated element's real box size (not guessing) showed that
+ * assumption was both unnecessary and actively wrong: a countertop's own
+ * horizontal footprint (1912 x 1350 on the measured model) isn't remotely
+ * thin in the X/Z sense at all — a fairly square plan, not a strip — so it
+ * was already excluded by the X/Z ratio alone, and the same held for every
+ * other roughly-square-in-plan element checked (the floor, the ceiling, a
+ * media console). The height comparison's only *measured* effect was
+ * excluding two genuinely flat, genuinely mis-framed elements ("Accent
+ * Wall Panel," whose own height happens to be shorter than its length in
+ * this model, and "Feature Wall (Block Tile)") purely because they're
+ * shorter than a full-height wall — never intentional, and never load-
+ * bearing for the countertop/floor/ceiling cases it was added to guard.
+ * Removed for that reason, on measured evidence rather than either
+ * function's original stated reasoning.
+ *
+ * This still doesn't reach every wall-like element: "Interior Wall
+ * (Painted)" and "Interior Wall Section, Hallway" measure close to square
+ * in plan (roughly 4670 x 4600 and 7350 x 3340 respectively on the curated
+ * model) — a real multi-wing/corner wall run merged into one mesh, not a
+ * single flat plane, so there is no one "thin axis" for either of them to
+ * report truthfully. Those two remain on the position-based fallback
+ * below; see this fix's own verification notes for why that's a modelling
+ * limit of those two specific meshes rather than a gap in this function.
+ */
+function flatElementAxis(size: THREE.Vector3): "x" | "z" | null {
+  const thinIsX = size.x <= size.z;
+  const thinDimension = thinIsX ? size.x : size.z;
+  const otherHorizontalDimension = thinIsX ? size.z : size.x;
+
+  if (thinDimension >= FLAT_ELEMENT_ASPECT_RATIO * otherHorizontalDimension) return null;
+  return thinIsX ? "x" : "z";
+}
+
+/**
  * The {target, position} pair easeCameraTo needs to frame an arbitrary
  * mesh — TourControls.tsx's one caller, stepping through elements in
  * tour mode. Not a drop-in replacement for annotationCameraTarget above
@@ -320,24 +405,61 @@ function elementViewBearing(target: THREE.Vector3, modelBounds: THREE.Box3): THR
  * measure the element itself: a box captures a long, thin element (a
  * wall, a countertop) far better than a sphere would, which either
  * overestimates a thin wall's apparent size along its short axis or
- * underestimates a long one. getBoundingSphere() is still used to turn
- * that box into the one radius number the distance formula needs — a
- * sphere is the right shape once you're computing "how far back to
- * stand," even though it was the wrong shape for measuring the
- * element's extent in the first place.
+ * underestimates a long one. That box's size (getSize()) is what
+ * flatElementAxis reads to tell a wall/door/panel from anything else;
+ * getBoundingSphere() is only still needed for the *non*-flat branch
+ * below, where a sphere is the right shape once you're computing "how
+ * far back to stand" for a roughly chunky object.
  *
- * distance = clamp(radius * ELEMENT_DISTANCE_MULTIPLIER, floor, cap) —
- * one continuous formula, not two hardcoded size tiers: a doorknob and a
- * kitchen island already get very different absolute distances from the
- * multiplier alone, since it scales linearly with each element's own
- * radius. The floor and cap only exist to keep both ends of that
- * continuum sane — see their own comments above for exactly why each
- * value was picked. The view direction itself is
- * (elementViewBearing.x, ELEMENT_VIEW_ELEVATION, elementViewBearing.y) —
- * an element-aware compass bearing at a fixed elevation angle — and
- * position.y is clamped a second time against modelBounds afterward; see
- * ELEMENT_MAX_CEILING_RATIO's own comment for why a fixed elevation
- * component alone isn't sufficient for large/tall elements specifically.
+ * Direction and distance are each picked by one of two branches,
+ * depending on flatElementAxis's verdict — see that function's own
+ * comment for the bug this split fixes (a position-derived bearing can
+ * land in-plane with a flat surface instead of facing it):
+ *
+ * - Flat (wall/door/panel): the view direction's horizontal component is
+ *   the element's own thin axis itself, signed toward the *model's*
+ *   centre along that one axis (the same inward-vs-outward comparison
+ *   elementViewBearing uses, just applied to a single axis instead of a
+ *   compass bearing) — this is what actually faces the surface, rather
+ *   than guessing from where the element sits in the floor plan. Distance
+ *   is drawn from `min(height, length)` of the element's *visible* face
+ *   (its two non-thin dimensions), not the full bounding-sphere radius:
+ *   fitting the sphere's full diagonal — which for a long, short wall run
+ *   is dominated by that run's length — is exactly what produced the
+ *   original "whole wall shrunk in an empty frame" bug, pulling the
+ *   camera back far enough to fit the entire run end to end. Framing
+ *   against the *smaller* of the two visible dimensions deliberately lets
+ *   the larger one (usually the run's length) crop out of frame instead,
+ *   the same way a real close-up photograph of a wall wouldn't try to fit
+ *   its entire length in one shot. A geometric-mean variant (sqrt(height *
+ *   length), growing more generously with the longer dimension) was tried
+ *   and rejected by screenshot: it pulled the camera back far enough on
+ *   short, wide elements to put unrelated furniture in another part of
+ *   the room back into frame, a worse result than the tight-but-clean
+ *   min() shot it was meant to loosen. One measured exception remains
+ *   under min() — a full-width facade "panel" whose own height is short
+ *   relative to the model's scale frames tight enough to include the
+ *   window's own blinds in shot; still a recognizable, in-focus view of
+ *   the window (not a sliver, not an empty void), just tighter than this
+ *   element's pre-fix framing. Documented rather than chased further,
+ *   since chasing it (see the geometric-mean attempt above) measurably
+ *   made other elements worse to fix one that was already passing.
+ * - Everything else (furniture, countertops): unchanged from before this
+ *   fix — elementViewBearing's position-based compass bearing, and the
+ *   full bounding-sphere radius for distance. Neither was actually wrong
+ *   for this case; see flatElementAxis's own comment for why it doesn't
+ *   claim these elements in the first place.
+ *
+ * Either branch's view direction still gets ELEMENT_VIEW_ELEVATION as its
+ * vertical component and one continuous distance formula — clamp(radius *
+ * ELEMENT_DISTANCE_MULTIPLIER, floor, cap) — so a doorknob and a kitchen
+ * island still get very different absolute distances from the multiplier
+ * alone, and the floor/cap still keep both ends of that continuum sane
+ * (see their own comments above for exactly why each value was picked).
+ * position.y is clamped a second time against modelBounds afterward
+ * regardless of which branch ran; see ELEMENT_MAX_CEILING_RATIO's own
+ * comment for why a fixed elevation component alone isn't sufficient for
+ * large/tall elements specifically.
  */
 export function elementCameraTarget(
   mesh: THREE.Object3D,
@@ -346,16 +468,43 @@ export function elementCameraTarget(
 ): { target: THREE.Vector3; position: THREE.Vector3 } {
   const box = new THREE.Box3().setFromObject(mesh);
   const target = box.getCenter(new THREE.Vector3());
-  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const size = box.getSize(new THREE.Vector3());
+
+  const flatAxis = flatElementAxis(size);
+
+  let direction: THREE.Vector3;
+  let framingRadius: number;
+
+  if (flatAxis) {
+    // Sign the thin axis toward the model's own centre along that one
+    // axis — the single-axis equivalent of elementViewBearing's
+    // outward/inward comparison — so the camera lands on the interior
+    // side of the surface, not beyond it.
+    const modelCenterOnAxis =
+      flatAxis === "x" ? (modelBounds.min.x + modelBounds.max.x) / 2 : (modelBounds.min.z + modelBounds.max.z) / 2;
+    const targetOnAxis = flatAxis === "x" ? target.x : target.z;
+    const inwardSign = targetOnAxis > modelCenterOnAxis ? -1 : 1;
+
+    direction =
+      flatAxis === "x"
+        ? new THREE.Vector3(inwardSign, ELEMENT_VIEW_ELEVATION, 0)
+        : new THREE.Vector3(0, ELEMENT_VIEW_ELEVATION, inwardSign);
+
+    const wideHorizontalDimension = flatAxis === "x" ? size.z : size.x;
+    framingRadius = Math.min(size.y, wideHorizontalDimension) / 2;
+  } else {
+    const bearing = elementViewBearing(target, modelBounds);
+    direction = new THREE.Vector3(bearing.x, ELEMENT_VIEW_ELEVATION, bearing.y);
+    framingRadius = box.getBoundingSphere(new THREE.Sphere()).radius;
+  }
+  direction.normalize();
 
   const distance = THREE.MathUtils.clamp(
-    sphere.radius * ELEMENT_DISTANCE_MULTIPLIER,
+    framingRadius * ELEMENT_DISTANCE_MULTIPLIER,
     controls.minDistance * ELEMENT_MIN_DISTANCE_FLOOR_RATIO,
     controls.maxDistance * ELEMENT_MAX_DISTANCE_CAP_RATIO,
   );
 
-  const bearing = elementViewBearing(target, modelBounds);
-  const direction = new THREE.Vector3(bearing.x, ELEMENT_VIEW_ELEVATION, bearing.y).normalize();
   const position = target.clone().add(direction.multiplyScalar(distance));
 
   // Ceiling clamp — see ELEMENT_MAX_CEILING_RATIO's own comment. Only
