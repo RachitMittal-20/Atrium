@@ -30,6 +30,13 @@
  * These are imperative three.js handles, not UI state — kept in closed-over
  * plain objects rather than store state, so registering one on every
  * mesh/marker mount never triggers a re-render the way calling set() would.
+ * The bridge's one non-three.js-handle field, killActiveCameraTween, is
+ * lib/motion.ts's easeCameraTo's own doing — see that function's comment
+ * for why a single shared "stop whatever the last caller started" slot is
+ * what keeps two independent camera-ease callers (TourControls.tsx
+ * stepping to a new element, AnnotationMarker.tsx/ReviewList.tsx framing
+ * a clicked comment) from ever animating the same camera.position/
+ * controls.target at once.
  *
  * Spatial annotation: `mode` is the review/pin toggle ModeIndicator.tsx
  * displays and drives from "C"/Escape, and ElementPanel.tsx's "Pin a
@@ -217,6 +224,13 @@ import type {
 interface ViewportBridge {
   controls: OrbitControlsImpl | null;
   invalidate: (() => void) | null;
+  /** Stops whatever the *previous* lib/motion.ts easeCameraTo call
+   *  started, if it's still mid-flight — set by easeCameraTo itself on
+   *  every call, and called by the *next* call before it starts its own
+   *  tween. null until the first camera ease of the session runs. See
+   *  this interface's own file-header paragraph for the race this
+   *  exists to prevent. */
+  killActiveCameraTween: (() => void) | null;
 }
 
 export type ProjectMode = "review" | "pin";
@@ -678,7 +692,7 @@ const CUSTOM_MODEL_RESET = {
 } as const satisfies Partial<ProjectState>;
 
 export const useProjectStore = create<ProjectState>((set, get) => {
-  const viewport: ViewportBridge = { controls: null, invalidate: null };
+  const viewport: ViewportBridge = { controls: null, invalidate: null, killActiveCameraTween: null };
   const elementObjects: Record<string, THREE.Object3D | null> = {};
   const annotationObjects: Record<string, THREE.Object3D | null> = {};
   // Tour mode's shared rate-limit clock — see TOUR_STEP_COOLDOWN_MS's own

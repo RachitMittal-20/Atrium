@@ -21,19 +21,19 @@
  *    Suppressed while in pin mode: ModeIndicator.tsx owns the cursor then
  *    (a crosshair), and highlighting an element you're about to pin past
  *    would read as "about to select", which isn't what's happening.
- *  - onClick no-ops entirely while projectStore's cameraMode is "tour" —
- *    a guided, hands-off view (see TourControls.tsx's own header), where
- *    a stray click selecting an element or starting a pin would fight
- *    the automatic camera moves rather than do anything useful. Outside
- *    tour, onClick's behaviour depends on `mode` instead: in "review" it
- *    sets selectedElementId as before; in "pin" it instead raycasts the
- *    click into a world point + surface normal, converts both into
- *    outerGroupRef's local space (see MESH_ROTATION and handleClick
- *    below), and hands them to projectStore as `pendingPin` for
- *    AnnotationComposer to pick up. Either way the empty-space click that
- *    clears selection is wired on the Canvas itself (onPointerMissed, in
- *    Scene.tsx) — and is itself unaffected by tour mode, since nothing
- *    about tour touches that handler.
+ *  - onClick's behaviour depends on `mode`, exactly the same regardless
+ *    of cameraMode — including "tour", which used to no-op every click
+ *    here entirely. In "review" it sets selectedElementId as before; in
+ *    "pin" it instead raycasts the click into a world point + surface
+ *    normal, converts both into outerGroupRef's local space (see
+ *    MESH_ROTATION and handleClick below), and hands them to
+ *    projectStore as `pendingPin` for AnnotationComposer to pick up. A
+ *    click during tour mode specifically also races against
+ *    TourControls.tsx's own tourIndex-driven selection — see that file's
+ *    header for why "whichever happened most recently wins, with no
+ *    explicit guard needed" is the deliberate, sufficient answer there.
+ *    Either way the empty-space click that clears selection is wired on
+ *    the Canvas itself (onPointerMissed, in Scene.tsx).
  *  - every one of these stops propagation, so a click or hover on the
  *    frontmost mesh never also registers on whatever is behind it.
  *  - a drei Html label follows the hovered mesh in screen space, and an
@@ -514,14 +514,14 @@ export function BuildingModel({ interactive = true, ...props }: BuildingModelPro
     event.stopPropagation();
     const state = useProjectStore.getState();
 
-    // Tour is a guided, hands-off view (see TourControls.tsx's own
-    // header) — neither selecting an element nor starting a pin fits
-    // that, so a click during tour does nothing beyond the
-    // stopPropagation above (which still matters: it's what stops a
-    // tour-mode click from falling through to whatever's behind this
-    // mesh, same as any other click).
-    if (state.cameraMode === "tour") return;
-
+    // Tour mode no longer no-ops a click here — a reviewer can pin a
+    // comment or select an element to recolor it without first dropping
+    // out of tour, exactly as in every other camera mode. TourControls.tsx
+    // (its own file header) already reasserts the tour's *own* current
+    // stop as the selection on the next tourNext/tourPrev, so a manual
+    // click like this one shows immediately and simply gets superseded
+    // whenever the tour itself advances again — never the other way
+    // around, and never fought over in between.
     if (state.mode === "pin") {
       const group = outerGroupRef.current;
       if (!group) return;

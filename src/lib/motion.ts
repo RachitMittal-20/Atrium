@@ -16,7 +16,12 @@
  *    .tsx (face a pinned point along its stored normal), ReviewList.tsx
  *    (row clicks and J/K navigation, both facing a pinned point the same
  *    way AnnotationMarker's own click does), and TourControls.tsx (easing
- *    onto each element in turn as tour mode steps through them).
+ *    onto each element in turn as tour mode steps through them). Every
+ *    call kills whatever the *previous* call's tween was, if it's still
+ *    running, via projectStore's viewport bridge — see this function's
+ *    own comment for why more than one of these callers can genuinely
+ *    fire close together now that clicking an element or an annotation
+ *    both work *during* tour mode too.
  *  - annotationCameraTarget, which computes the {target, position} pair
  *    easeCameraTo needs from an annotation's live Object3D — shared by
  *    AnnotationMarker.tsx and ReviewList.tsx so "how do we frame a pinned
@@ -35,6 +40,7 @@ import gsap from "gsap";
 import { CustomEase } from "gsap/CustomEase";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
+import { useProjectStore } from "@/store/projectStore";
 
 gsap.registerPlugin(CustomEase);
 
@@ -70,8 +76,23 @@ export const PIN_BREAKPOINT = 900;
  * damping-driven writes to them. Calls `controls.update()` and `invalidate`
  * each tick so the demand frameloop keeps drawing through the tween.
  *
- * Returns the gsap timeline so a caller can `.kill()` it on cleanup (e.g. if
- * the selection changes again before the tween finishes).
+ * Kills whatever camera-ease tween the *previous* call to this function
+ * left running, via projectStore's viewport bridge (killActiveCameraTween)
+ * — before this existed, two independent callers with real, separate
+ * triggers (TourControls.tsx stepping to a new element on a timer-gated
+ * input, AnnotationMarker.tsx/ReviewList.tsx framing a clicked comment)
+ * could both be mid-flight at once, each writing to the same
+ * camera.position/controls.target every tick and visibly fighting each
+ * other until one finished. This makes "only the most recent camera
+ * intent wins" true globally, for any two callers, without each one
+ * needing to know the others exist — every call here is both a kill of
+ * whatever came before and a fresh registration for whatever comes next.
+ *
+ * Returns the gsap timeline so a caller can *also* `.kill()` it on its own
+ * cleanup (e.g. if the selection changes again before the tween finishes)
+ * — harmless alongside the shared kill above; GSAP's `.kill()` is a no-op
+ * on an already-dead timeline, so both mechanisms killing the same
+ * timeline is never a problem, only ever redundant-but-safe.
  */
 export function easeCameraTo(
   controls: OrbitControlsImpl,
@@ -80,6 +101,8 @@ export function easeCameraTo(
   target: THREE.Vector3,
   position: THREE.Vector3,
 ): gsap.core.Timeline {
+  useProjectStore.getState().getViewport().killActiveCameraTween?.();
+
   const targetTween = controls.target.clone();
   const positionTween = camera.position.clone();
 
@@ -93,6 +116,9 @@ export function easeCameraTo(
   });
   timeline.to(targetTween, { x: target.x, y: target.y, z: target.z, duration: DURATION.frame, ease: EASE_WEIGHTED }, 0);
   timeline.to(positionTween, { x: position.x, y: position.y, z: position.z, duration: DURATION.frame, ease: EASE_WEIGHTED }, 0);
+
+  useProjectStore.getState().registerViewport({ killActiveCameraTween: () => timeline.kill() });
+
   return timeline;
 }
 
