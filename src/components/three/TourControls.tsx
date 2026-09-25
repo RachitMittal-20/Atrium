@@ -166,7 +166,16 @@ export function TourControls({ bounds }: TourControlsProps) {
       state.setSelected(element.meshName);
     }
 
-    const { target, position } = elementCameraTarget(mesh, controls, bounds);
+    // A curated Element carries a real schedule `name` ("Facade Wall,
+    // Bedroom") elementCameraTarget's exterior/interior rule can match
+    // against; an uploaded model's UploadedElement has no such schedule,
+    // only `displayName` (the exporter's own mesh name, best-effort) —
+    // close enough to check the same way, and falling through to the
+    // interior-framing default for anything that doesn't match "facade"
+    // or "envelope" is exactly the right behavior for arbitrary
+    // user-uploaded geometry with no real category data behind it.
+    const elementName = "name" in element ? element.name : element.displayName;
+    const { target, position } = elementCameraTarget(mesh, controls, bounds, elementName);
     const timeline = easeCameraTo(controls, camera, invalidate, target, position);
     // Killed, not left to finish, if tourIndex changes again mid-tween
     // (a fast double-click on Next, say) — the same cleanup

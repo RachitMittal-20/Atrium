@@ -382,6 +382,35 @@ function flatElementAxis(size: THREE.Vector3): "x" | "z" | null {
   return thinIsX ? "x" : "z";
 }
 
+// Matches an Element's own `name` (src/data/project.ts) against the two
+// words this catalogue actually uses for the building's own outer
+// envelope: "Existing Building Envelope — Lower/Full Height" and "Facade
+// Wall, Bedroom" — checked against the real 43-element schedule, these
+// are the *only* three matches, and there are no false positives (no
+// interior wall, panel, or fixture happens to use either word). Case-
+// insensitive since nothing enforces a casing convention on this data.
+const EXTERIOR_ELEMENT_NAME_PATTERN = /facade|envelope/i;
+
+/**
+ * Whether an element should be framed from *outside* the building rather
+ * than from inside it — see elementCameraTarget's own comment for where
+ * this is used and why it replaced a position-based guess.
+ *
+ * Keyed off the element's own `name`/category data, not its shape or
+ * where its box happens to sit: whether a surface is genuinely part of
+ * the building's exterior is something ATRIUM's own schedule already
+ * knows (a designer wrote "Facade Wall" or "Building Envelope," not
+ * "Interior Wall," for a reason), so there's no need to infer it
+ * geometrically at all. This is a deliberately narrow allowlist, not a
+ * shape heuristic: everything that isn't explicitly the envelope or a
+ * facade — including every other flat wall, door, and panel, no matter
+ * how close to the building's own perimeter its box sits — is framed
+ * from the interior side, full stop.
+ */
+function isExteriorElementName(name: string): boolean {
+  return EXTERIOR_ELEMENT_NAME_PATTERN.test(name);
+}
+
 /**
  * The {target, position} pair easeCameraTo needs to frame an arbitrary
  * mesh — TourControls.tsx's one caller, stepping through elements in
@@ -417,38 +446,47 @@ function flatElementAxis(size: THREE.Vector3): "x" | "z" | null {
  * land in-plane with a flat surface instead of facing it):
  *
  * - Flat (wall/door/panel): the view direction's horizontal component is
- *   the element's own thin axis itself, signed toward the *model's*
- *   centre along that one axis (the same inward-vs-outward comparison
- *   elementViewBearing uses, just applied to a single axis instead of a
- *   compass bearing) — this is what actually faces the surface, rather
- *   than guessing from where the element sits in the floor plan. Distance
- *   is drawn from `min(height, length)` of the element's *visible* face
- *   (its two non-thin dimensions), not the full bounding-sphere radius:
- *   fitting the sphere's full diagonal — which for a long, short wall run
- *   is dominated by that run's length — is exactly what produced the
- *   original "whole wall shrunk in an empty frame" bug, pulling the
- *   camera back far enough to fit the entire run end to end. Framing
- *   against the *smaller* of the two visible dimensions deliberately lets
- *   the larger one (usually the run's length) crop out of frame instead,
- *   the same way a real close-up photograph of a wall wouldn't try to fit
- *   its entire length in one shot. A geometric-mean variant (sqrt(height *
- *   length), growing more generously with the longer dimension) was tried
- *   and rejected by screenshot: it pulled the camera back far enough on
- *   short, wide elements to put unrelated furniture in another part of
- *   the room back into frame, a worse result than the tight-but-clean
- *   min() shot it was meant to loosen. One measured exception remains
- *   under min() — a full-width facade "panel" whose own height is short
- *   relative to the model's scale frames tight enough to include the
- *   window's own blinds in shot; still a recognizable, in-focus view of
- *   the window (not a sliver, not an empty void), just tighter than this
- *   element's pre-fix framing. Documented rather than chased further,
- *   since chasing it (see the geometric-mean attempt above) measurably
- *   made other elements worse to fix one that was already passing.
+ *   the element's own thin axis itself — this is what actually faces the
+ *   surface, rather than guessing from where the element sits in the
+ *   floor plan. Signed toward the *interior* side by default (the same
+ *   inward-vs-outward comparison against the model's own centre this
+ *   used before), unless isExteriorElementName(elementName) says this
+ *   element genuinely is part of the building's exterior (the envelope
+ *   itself, or a facade), in which case it's signed the other way —
+ *   see that function's own comment for why this is a category lookup,
+ *   not a geometric guess. This is also what fixed the one measured
+ *   exception noted below in a previous pass: "Facade Wall, Bedroom"
+ *   used to frame from the interior, close enough to catch the window's
+ *   own blinds in shot, purely because nothing told it that *this*
+ *   wall — unlike every other wall in the schedule — is meant to be
+ *   looked at from outside. Distance is drawn from `min(height, length)`
+ *   of the element's *visible* face (its two non-thin dimensions), not
+ *   the full bounding-sphere radius: fitting the sphere's full diagonal —
+ *   which for a long, short wall run is dominated by that run's length —
+ *   is exactly what produced the original "whole wall shrunk in an empty
+ *   frame" bug, pulling the camera back far enough to fit the entire run
+ *   end to end. Framing against the *smaller* of the two visible
+ *   dimensions deliberately lets the larger one (usually the run's
+ *   length) crop out of frame instead, the same way a real close-up
+ *   photograph of a wall wouldn't try to fit its entire length in one
+ *   shot. A geometric-mean variant (sqrt(height * length), growing more
+ *   generously with the longer dimension) was tried and rejected by
+ *   screenshot: it pulled the camera back far enough on short, wide
+ *   elements to put unrelated furniture in another part of the room back
+ *   into frame, a worse result than the tight-but-clean min() shot it
+ *   was meant to loosen.
  * - Everything else (furniture, countertops): unchanged from before this
  *   fix — elementViewBearing's position-based compass bearing, and the
  *   full bounding-sphere radius for distance. Neither was actually wrong
  *   for this case; see flatElementAxis's own comment for why it doesn't
- *   claim these elements in the first place.
+ *   claim these elements in the first place. frameFromExterior is read
+ *   but not threaded into this branch: the two envelope elements are the
+ *   only exterior-tagged meshes that ever land here (a facade is always
+ *   flat — see isExteriorElementName), and an element that near-enough
+ *   *is* the whole model already collapses elementViewBearing's own
+ *   proximity blend down to its fixed fallback bearing regardless of
+ *   inward/outward, verified by screenshot in an earlier pass — so there
+ *   is no observable case left for this branch to flip.
  *
  * Either branch's view direction still gets ELEMENT_VIEW_ELEVATION as its
  * vertical component and one continuous distance formula — clamp(radius *
@@ -465,12 +503,14 @@ export function elementCameraTarget(
   mesh: THREE.Object3D,
   controls: OrbitControlsImpl,
   modelBounds: THREE.Box3,
+  elementName: string,
 ): { target: THREE.Vector3; position: THREE.Vector3 } {
   const box = new THREE.Box3().setFromObject(mesh);
   const target = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
 
   const flatAxis = flatElementAxis(size);
+  const frameFromExterior = isExteriorElementName(elementName);
 
   let direction: THREE.Vector3;
   let framingRadius: number;
@@ -479,16 +519,20 @@ export function elementCameraTarget(
     // Sign the thin axis toward the model's own centre along that one
     // axis — the single-axis equivalent of elementViewBearing's
     // outward/inward comparison — so the camera lands on the interior
-    // side of the surface, not beyond it.
+    // side of the surface by default, not beyond it. Flipped when
+    // frameFromExterior says otherwise — see isExteriorElementName's own
+    // comment for why that's a name/category lookup, not a second
+    // geometric guess layered on top of this one.
     const modelCenterOnAxis =
       flatAxis === "x" ? (modelBounds.min.x + modelBounds.max.x) / 2 : (modelBounds.min.z + modelBounds.max.z) / 2;
     const targetOnAxis = flatAxis === "x" ? target.x : target.z;
     const inwardSign = targetOnAxis > modelCenterOnAxis ? -1 : 1;
+    const sign = frameFromExterior ? -inwardSign : inwardSign;
 
     direction =
       flatAxis === "x"
-        ? new THREE.Vector3(inwardSign, ELEMENT_VIEW_ELEVATION, 0)
-        : new THREE.Vector3(0, ELEMENT_VIEW_ELEVATION, inwardSign);
+        ? new THREE.Vector3(sign, ELEMENT_VIEW_ELEVATION, 0)
+        : new THREE.Vector3(0, ELEMENT_VIEW_ELEVATION, sign);
 
     const wideHorizontalDimension = flatAxis === "x" ? size.z : size.x;
     framingRadius = Math.min(size.y, wideHorizontalDimension) / 2;
