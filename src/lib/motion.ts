@@ -213,6 +213,26 @@ const ELEMENT_MAX_CEILING_RATIO = 0.15;
 // changes.
 const ELEMENT_VIEW_ELEVATION = 0.6;
 
+// The flatter elevation used instead of ELEMENT_VIEW_ELEVATION whenever
+// ELEMENT_NON_FLAT_FRAMING_RADIUS_CAP_RATIO below actually reduces an
+// element's framingRadius — see that constant's own comment for which
+// elements this is. 0.6's "elevated 3/4" pitch was chosen for a compact,
+// furniture-scale object, photographed the way a catalogue shot would be;
+// it's the wrong angle for a large surface being deliberately framed
+// *close* rather than fit in full, because the same fixed ratio between
+// this and the horizontal bearing means whatever distance the cap allows
+// still multiplies into a vertical offset proportioned for a small
+// object, not a wall-height one. Measured, not guessed: capping distance
+// alone (keeping 0.6) left two of this round's four target elements
+// still reading as an aerial shot from above the roofline, confirmed by
+// screenshot — the elevation ratio, not just the distance magnitude, was
+// still too steep for their own scale. 0.25 (≈14° above horizontal,
+// against 0.6's ≈31°) was chosen empirically the same way and reverified
+// by screenshot: flat enough to read as a normal, human-eye-level
+// interior view rather than a lifted product shot, without going so flat
+// it reads as looking straight at a wall with no depth at all.
+const ELEMENT_VIEW_ELEVATION_LARGE = 0.25;
+
 // The horizontal (XZ) bearing the *original*, pre-element-aware direction
 // used — (1, 1) normalized, the XZ projection of (1, 0.6, 1). Furniture
 // and anything else near the model's own horizontal centre (see
@@ -220,6 +240,51 @@ const ELEMENT_VIEW_ELEVATION = 0.6;
 // unchanged — this constant is what keeps that framing identical to
 // before rather than element-awareness silently redirecting every shot.
 const ELEMENT_VIEW_FALLBACK_BEARING = new THREE.Vector2(1, 1).normalize();
+
+// The ceiling on framingRadius for the *non-flat* branch of
+// elementCameraTarget below — caps the element's own full bounding-sphere
+// radius so an element whose footprint spans a large fraction of the
+// building's own plan (a room-spanning interior wall run, a full floor
+// slab) still reads as a normal, close interior shot rather than one
+// pulled back far enough to show most of the room — and, since the view
+// direction's elevation component multiplies straight through distance
+// into a vertical offset, far enough to also clear ELEMENT_MAX_CEILING
+// _RATIO's own clamp and look down at the building from above it. This
+// is the same failure mode that constant already patches for tall *flat*
+// elements; this one patches the equivalent bug for large *chunky* ones,
+// which a height-only clamp can't fix since the problem is the
+// *distance* driving that height, not the height itself.
+//
+// Derived from controls.maxDistance, measured rather than assumed: an
+// early version of this constant guessed maxDistance from the *shell's
+// own* sphere radius (≈4755) and picked a ratio meant to land the cap
+// near the kitchen countertop's own radius (≈1170, one of the two
+// elements this cap must leave untouched — see below). Logging the real
+// runtime values showed that guess was wrong by a wide margin: the
+// *whole model's* own extent.radius that actually drives
+// controls.maxDistance is ≈7030 (larger than any single mesh, this
+// model's own geometry apparently extends slightly past the envelope
+// meshes alone), making maxDistance ≈28118 rather than the ≈19000
+// assumed — a cap ratio derived from the wrong radius landed nearly 50%
+// too loose, which is exactly why the first version of this fix produced
+// no visible change on screen. 0.0425 of the *real, measured* maxDistance
+// lands the cap at ≈1195 — just above the kitchen countertop's own
+// measured radius (≈1170.4), the tighter of the two elements this cap
+// must leave unaffected (the sofa's own radius, ≈1112, clears it with
+// more room), and well under every element this round's audit found
+// broken (kitchen range ≈1967; the two "Interior Wall" surfaces and the
+// floor, all ≈3200–4100).
+//
+// Never applied to an exterior-tagged element (isExteriorElementName) —
+// the building's own envelope legitimately *is* close to the whole
+// model's own scale, and framing it at the same tight radius as a
+// countertop would crop the one element this whole file's distance/
+// ceiling constants were originally tuned around (see
+// ELEMENT_MAX_CEILING_RATIO's own comment, measured against
+// "building-shell-lower" specifically). elementCameraTarget skips this
+// cap entirely for that case rather than trying to make one ratio serve
+// both a genuinely building-scale element and a merely large one.
+const ELEMENT_NON_FLAT_FRAMING_RADIUS_CAP_RATIO = 0.0425;
 
 // How much thinner a flat element's shorter horizontal (X or Z) dimension
 // has to be than its longer horizontal dimension before flatElementAxis
@@ -475,25 +540,44 @@ function isExteriorElementName(name: string): boolean {
  *   elements to put unrelated furniture in another part of the room back
  *   into frame, a worse result than the tight-but-clean min() shot it
  *   was meant to loosen.
- * - Everything else (furniture, countertops): unchanged from before this
- *   fix — elementViewBearing's position-based compass bearing, and the
- *   full bounding-sphere radius for distance. Neither was actually wrong
- *   for this case; see flatElementAxis's own comment for why it doesn't
- *   claim these elements in the first place. frameFromExterior is read
- *   but not threaded into this branch: the two envelope elements are the
- *   only exterior-tagged meshes that ever land here (a facade is always
- *   flat — see isExteriorElementName), and an element that near-enough
- *   *is* the whole model already collapses elementViewBearing's own
- *   proximity blend down to its fixed fallback bearing regardless of
- *   inward/outward, verified by screenshot in an earlier pass — so there
- *   is no observable case left for this branch to flip.
+ * - Everything else (furniture, countertops, and — this is the case that
+ *   didn't get fixed alongside flatElementAxis — large chunky surfaces
+ *   like an interior wall run or a floor slab that fail that function's
+ *   thinness test for the honest reason that they genuinely aren't thin
+ *   panes, just large merged volumes): elementViewBearing's position-
+ *   based compass bearing, unchanged. frameFromExterior *is* read here,
+ *   unlike everywhere else in this branch's comments claim — not to flip
+ *   inward/outward (the two envelope elements are the only exterior-
+ *   tagged meshes that ever land here, a facade is always flat, and an
+ *   element that near-enough *is* the whole model already collapses
+ *   elementViewBearing's own proximity blend down to its fixed fallback
+ *   bearing regardless of inward/outward, verified by screenshot in an
+ *   earlier pass — so there's no observable inward/outward case left to
+ *   flip), but to exempt the envelope from the distance cap below.
  *
- * Either branch's view direction still gets ELEMENT_VIEW_ELEVATION as its
- * vertical component and one continuous distance formula — clamp(radius *
- * ELEMENT_DISTANCE_MULTIPLIER, floor, cap) — so a doorknob and a kitchen
- * island still get very different absolute distances from the multiplier
- * alone, and the floor/cap still keep both ends of that continuum sane
- * (see their own comments above for exactly why each value was picked).
+ *   Distance still comes from the element's own bounding-sphere radius,
+ *   but — for a *non*-exterior element only — that radius is now capped,
+ *   and the view direction's elevation flattened, when the cap actually
+ *   bites. See ELEMENT_NON_FLAT_FRAMING_RADIUS_CAP_RATIO's and
+ *   ELEMENT_VIEW_ELEVATION_LARGE's own comments for the bug each half
+ *   fixes and why measurement showed one alone wasn't enough: an element
+ *   whose footprint spans much of the building's own plan produces a
+ *   sphere radius large enough to pull the camera back far enough to see
+ *   most of the room on its own, and capping *only* that radius still
+ *   left two of this round's four target elements reading as an aerial
+ *   shot — the fixed elevation ratio, tuned for a compact furniture-
+ *   scale object, was multiplying even the capped distance into a
+ *   vertical offset disproportionate to a wall-height element. Neither
+ *   adjustment ever fires for an element already comfortably under the
+ *   cap (a sofa, a countertop) or for the envelope itself, confirmed by
+ *   measurement.
+ *
+ * Either branch's distance comes from one continuous formula —
+ * clamp(radius * ELEMENT_DISTANCE_MULTIPLIER, floor, cap) — so a
+ * doorknob and a kitchen island still get very different absolute
+ * distances from the multiplier alone, and the floor/cap still keep both
+ * ends of that continuum sane (see their own comments above for exactly
+ * why each value was picked).
  * position.y is clamped a second time against modelBounds afterward
  * regardless of which branch ran; see ELEMENT_MAX_CEILING_RATIO's own
  * comment for why a fixed elevation component alone isn't sufficient for
@@ -538,8 +622,20 @@ export function elementCameraTarget(
     framingRadius = Math.min(size.y, wideHorizontalDimension) / 2;
   } else {
     const bearing = elementViewBearing(target, modelBounds);
-    direction = new THREE.Vector3(bearing.x, ELEMENT_VIEW_ELEVATION, bearing.y);
-    framingRadius = box.getBoundingSphere(new THREE.Sphere()).radius;
+    const rawRadius = box.getBoundingSphere(new THREE.Sphere()).radius;
+    // Capped — see ELEMENT_NON_FLAT_FRAMING_RADIUS_CAP_RATIO's own
+    // comment for why a large chunky element's raw sphere radius alone
+    // isn't safe to use uncapped here, and for why an exterior-tagged
+    // element (the envelope itself) skips this entirely.
+    const cap = controls.maxDistance * ELEMENT_NON_FLAT_FRAMING_RADIUS_CAP_RATIO;
+    const isCapped = !frameFromExterior && rawRadius > cap;
+    framingRadius = frameFromExterior ? rawRadius : Math.min(rawRadius, cap);
+    // A large element that actually got capped also switches to the
+    // flatter elevation — see ELEMENT_VIEW_ELEVATION_LARGE's own comment
+    // for why capping distance alone wasn't enough on its own to keep
+    // these elements reading as a normal interior shot.
+    const elevation = isCapped ? ELEMENT_VIEW_ELEVATION_LARGE : ELEMENT_VIEW_ELEVATION;
+    direction = new THREE.Vector3(bearing.x, elevation, bearing.y);
   }
   direction.normalize();
 
