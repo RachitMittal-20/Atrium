@@ -11,6 +11,14 @@
  * classes either way, so there's one canonical place button styling lives
  * rather than a hand-styled anchor duplicating it wherever a button needs
  * to navigate.
+ *
+ * buttonClassName is the same class string, exported standalone for the
+ * one case an actual <Button> can't cover: Invitation.tsx's "Try your own
+ * model" control needs this exact look on a <label> wrapping a hidden
+ * file input (a real file picker has to be a <label>/<input type="file">
+ * pair, not a button or a link) — reusing the string keeps that control a
+ * visible peer of "Enter Project" rather than a second, hand-tuned
+ * near-copy of this file's own classes.
  */
 import type { AnchorHTMLAttributes, ButtonHTMLAttributes } from "react";
 import Link from "next/link";
@@ -35,8 +43,12 @@ const variants = {
   ghost: "border border-rule text-ink hover:border-ruleHi hover:text-ink",
 };
 
+export function buttonClassName(variant: keyof typeof variants = "primary", className = ""): string {
+  return `${base} ${variants[variant]} ${className}`;
+}
+
 export function Button({ variant = "primary", className = "", href, ...props }: ButtonProps) {
-  const classes = `${base} ${variants[variant]} ${className}`;
+  const classes = buttonClassName(variant, className);
 
   if (href !== undefined) {
     return (

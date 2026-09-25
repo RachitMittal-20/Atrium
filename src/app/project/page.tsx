@@ -13,9 +13,10 @@
  * mode actually uses) stacks below that. VisibilityToolbar (per-category
  * show/hide chips + Reset) takes the otherwise-free bottom-right corner,
  * just above DemoDataBadge — see its own header for why there.
- * CustomModelControl ("try your own model" — see its own header) stacks
- * below the top-left wordmark/label block instead, the other corner with
- * room to spare.
+ * CustomModelControl stacks below the top-left wordmark/label block
+ * instead, the other corner with room to spare — it renders nothing at
+ * all unless a custom model is already active (the "try your own model"
+ * trigger itself lives on the landing screen now, see its own header).
  *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark

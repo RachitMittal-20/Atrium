@@ -12,18 +12,54 @@
  * only prefers-reduced-motion matters, and when it's set this skips
  * SplitText and the timeline entirely: the line and button are plain,
  * static, and already visible.
+ *
+ * Two choices sit side by side below the headline, not one: "Enter
+ * Project" (primary, gold) opens the curated Meridian House model;
+ * "Try your own model" (ghost, secondary) is the entry point for a
+ * reviewer's own .glb/.gltf — moved here from a small corner chip inside
+ * the project view itself (src/components/ui/CustomModelControl.tsx,
+ * which still owns everything about an *already-active* custom model —
+ * the local-preview note, the eye-height slider, "Back to Meridian
+ * House" — just not this initial trigger). This is the moment a visitor
+ * actually decides which model they're looking at, so the choice lives
+ * here instead of being discovered after the fact inside the tool.
+ * Selecting a file sets projectStore's customModelUrl directly (the same
+ * action CustomModelControl's own file input always called) and then
+ * navigates to /project — the store is a module-level singleton, so a
+ * client-side route change (router.push, not a full reload) carries that
+ * state across straight through, the same way ProjectHydrator's own
+ * hydrate() never touches customModelUrl and so never clobbers it either.
  */
 "use client";
 
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type ChangeEvent } from "react";
+import { useRouter } from "next/navigation";
 import gsap from "gsap";
 import { SplitText } from "gsap/SplitText";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonClassName } from "@/components/ui/Button";
+import { useProjectStore } from "@/store/projectStore";
 import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
+
+// Matches CustomModelControl.tsx's own file input — see that file's
+// header for why .glb/.gltf only and no drag-and-drop.
+const ACCEPTED_EXTENSIONS = ".glb,.gltf";
 
 export function Invitation() {
   const lineRef = useRef<HTMLHeadingElement>(null);
   const buttonWrapRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
+  const setCustomModel = useProjectStore((state) => state.setCustomModel);
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Cleared unconditionally, matching CustomModelControl.tsx's own
+    // handler — without this, picking the same filename twice in a row
+    // wouldn't fire a second change event.
+    event.target.value = "";
+    if (!file) return;
+    setCustomModel(URL.createObjectURL(file), file.name);
+    router.push("/project");
+  };
 
   useLayoutEffect(() => {
     const line = lineRef.current;
@@ -68,10 +104,14 @@ export function Invitation() {
       >
         See it instead.
       </h2>
-      <div ref={buttonWrapRef}>
+      <div ref={buttonWrapRef} className="flex flex-wrap items-center justify-center gap-4">
         <Button href="/project" variant="primary">
           Enter Project
         </Button>
+        <label className={`cursor-pointer ${buttonClassName("ghost")}`}>
+          Try your own model
+          <input type="file" accept={ACCEPTED_EXTENSIONS} onChange={handleFileChange} className="sr-only" />
+        </label>
       </div>
     </section>
   );
