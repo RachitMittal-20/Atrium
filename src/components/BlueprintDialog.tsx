@@ -194,7 +194,7 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
     try {
       await onCreate(await make());
     } catch (e) {
-      console.error("[blueprint] failed", e);
+      if (!(e instanceof BlueprintError)) console.error("[blueprint] failed", e);
       setError(
         e instanceof BlueprintError
           ? e.message
@@ -218,7 +218,9 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
         }),
       );
     } catch (e) {
-      console.error("[blueprint] analysis failed", e);
+      // A BlueprintError is an expected, user-fixable outcome shown in the
+      // dialog; logging it would pop Next's dev error overlay for nothing.
+      if (!(e instanceof BlueprintError)) console.error("[blueprint] analysis failed", e);
       setError(
         e instanceof BlueprintError
           ? e.message

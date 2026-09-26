@@ -26,9 +26,11 @@ const MIN_ROOM_AREA_M2 = 1.5;
 
 const OUTSIDE = -1;
 
-export function detectRooms(source: WallMask, pxPerMetre: number): RoomMap {
-  const rSmall = Math.max(1, Math.round(ROOM_SEAL_RADIUS_M * pxPerMetre));
-  const rBig = Math.max(rSmall + 1, Math.round(OUTDOOR_SEAL_RADIUS_M * pxPerMetre));
+/** One detection attempt with the seal radii scaled by `radiusScale`;
+ *  null when no room survives (e.g. the outdoor seal swallowed them all). */
+function detectAt(source: WallMask, pxPerMetre: number, radiusScale: number): RoomMap | null {
+  const rSmall = Math.max(1, Math.round(ROOM_SEAL_RADIUS_M * pxPerMetre * radiusScale));
+  const rBig = Math.max(rSmall + 1, Math.round(OUTDOOR_SEAL_RADIUS_M * pxPerMetre * radiusScale));
 
   // Work on a padded copy so the outdoors always exists around the
   // building, even when the image is cropped tight to the walls.
@@ -62,11 +64,7 @@ export function detectRooms(source: WallMask, pxPerMetre: number): RoomMap {
   const remap = new Int32Array(comps.count + 1);
   let n = 0;
   for (let id = 1; id <= comps.count; id++) if (comps.area[id] >= minArea) remap[id] = ++n;
-  if (n === 0) {
-    throw new BlueprintError(
-      "No enclosed rooms were found. Make sure the outer walls form a closed shape, or try the manual option.",
-    );
-  }
+  if (n === 0) return null;
 
   // 3. Competitive growth over non-wall pixels.
   const labels = new Int32Array(mask.length);
@@ -122,4 +120,20 @@ export function detectRooms(source: WallMask, pxPerMetre: number): RoomMap {
     if (cropped[i] > 0) cropped[i] = rename.get(cropped[i]) ?? 0;
   }
   return { width: w, height: h, labels: cropped, rooms };
+}
+
+/**
+ * Finds the rooms in a wall mask. The seal radii come from real-world
+ * sizes, which depend on the scale estimate; if that estimate is off and
+ * no room survives, retry with progressively smaller seals (which need
+ * tighter walls to hold) before telling the person nothing was found.
+ */
+export function detectRooms(source: WallMask, pxPerMetre: number): RoomMap {
+  for (const scale of [1, 0.6, 0.35, 0.2]) {
+    const found = detectAt(source, pxPerMetre, scale);
+    if (found) return found;
+  }
+  throw new BlueprintError(
+    "No enclosed rooms were found. Check that the image is a plain floor plan with thick wall lines and a mostly closed outline, enter the real building length if you know it, or use the manual option.",
+  );
 }

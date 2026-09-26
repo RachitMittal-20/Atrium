@@ -52,9 +52,12 @@ export function layoutFromPixels(pixels: PlanPixels, options: BlueprintOptions):
     if (y + 1 > y1) y1 = y + 1;
   }
   const longest = Math.max(x1 - x0, y1 - y0);
-  const pxPerMetre = options.buildingLength
-    ? longest / options.buildingLength
-    : walls.wallThickness / ASSUMED_WALL_M;
+  // With no stated length, guess from wall thickness but keep the result a
+  // believable building (6-30 m on its longest side): a plan drawn with
+  // unusually thick or thin lines would otherwise imply a 3 m or 90 m house.
+  const estimated = longest / (walls.wallThickness / ASSUMED_WALL_M);
+  const length = options.buildingLength ?? Math.min(30, Math.max(6, estimated));
+  const pxPerMetre = longest / length;
   const rooms = detectRooms(walls, pxPerMetre);
   return layoutFromImage(walls, rooms, pxPerMetre, options.wallHeight);
 }
