@@ -15,13 +15,24 @@
  * the first place is a landing-screen decision, not an in-project one).
  *
  * Lives outside the Canvas in ordinary DOM, mounted once in
- * src/app/project/page.tsx. Placement: the top-left corner, below the
- * ATRIUM wordmark/project-label block — the top-right column already
- * stacks four items deep (ModeIndicator, PresenceIndicator,
- * CameraModeToggle, ControlsHelp) and VisibilityToolbar claims bottom-
- * right, so top-left is the one corner with room, and it pairs
- * thematically with the "what project am I looking at" text already
- * there ("what *model* am I looking at" sitting right below it).
+ * src/app/project/page.tsx.
+ *
+ * Placement — top-center on wide screens, top-left below the wordmark on
+ * narrow ones. It used to sit in the top-left column at all widths, but
+ * above PIN_BREAKPOINT (900px, lib/motion.ts) UploadedReviewList.tsx
+ * docks a 320px comments panel to the left edge from top-24 down to
+ * bottom-4, which landed directly on top of this cluster and hid every
+ * button in it whenever the comments panel was open. The other edges
+ * are taken too: UploadedElementPanel.tsx docks to the right edge, and
+ * TourHud.tsx/VisibilityToolbar.tsx own the bottom. The top strip is the
+ * one band no docked panel reaches, and top-center in particular is
+ * clear of the wordmark block (left) and the mode/presence/camera stack
+ * (right). It sits at top-16, just under ModeIndicator.tsx's transient
+ * pin-mode hint (also top-center, ending about 58px down) and above the
+ * comments panel's own top edge (96px). At or below 900px those panels
+ * become bottom sheets instead, leaving the left column free again, so
+ * the original top-left placement is kept there — a centered row would
+ * collide with the top-right stack on a phone-width screen.
  *
  * Three pieces of UI while a custom model is active, matching the
  * mono/brass toolbar-chip language CameraModeToggle.tsx/
@@ -47,7 +58,8 @@
  *     the same edits — see UploadedModel.tsx's header, "Round trip," for
  *     the load-side half. A failed export shows a short inline message
  *     rather than throwing: the reviewer's session is still intact, and
- *     they can simply try again.
+ *     they can simply try again. The two buttons share one wrapping row
+ *     so the cluster stays short.
  *
  *  3. Only while a custom model is active *and* cameraMode is
  *     "walkthrough": a manual eye-height slider (customEyeHeightMeters),
@@ -122,7 +134,11 @@ export function CustomModelControl() {
   };
 
   return (
-    <div className="absolute left-6 top-24 z-10 flex flex-col items-start gap-2 sm:left-10 sm:top-28">
+    // Placement — see file header. Default (<= 900px) is the original
+    // top-left column; above 900px it becomes a centered column at
+    // top-16, clear of the docked comments/element panels. min-[901px]
+    // matches PIN_BREAKPOINT's own "<= 900 is mobile" cutoff exactly.
+    <div className="absolute left-6 top-24 z-10 flex flex-col items-start gap-2 sm:left-10 sm:top-28 min-[901px]:left-1/2 min-[901px]:top-16 min-[901px]:-translate-x-1/2 min-[901px]:items-center">
       {/* The required "this is a local preview" note — see file header.
           Always visible while a custom model is active, never collapsed
           behind a toggle the way ControlsHelp's own panel is: this is a
@@ -138,16 +154,18 @@ export function CustomModelControl() {
         </p>
       </div>
 
-      <button type="button" onClick={() => clearCustomModel()} className={chipClassName}>
-        Back to Meridian House
-      </button>
-
-      {/* Download the edited model — see file header, item 2. Disabled
-          (not hidden) while an export runs so the button visibly
-          acknowledges the press on a large model. */}
-      <button type="button" onClick={handleDownload} disabled={isExporting} className={`${chipClassName} disabled:opacity-60`}>
-        {isExporting ? "Preparing…" : "Download edited .glb"}
-      </button>
+      {/* The two action buttons, side by side (wrapping if the screen is
+          too narrow for both) — see file header, items 1 and 2. Download
+          is disabled, not hidden, while an export runs so the button
+          visibly acknowledges the press on a large model. */}
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <button type="button" onClick={() => clearCustomModel()} className={chipClassName}>
+          Back to Meridian House
+        </button>
+        <button type="button" onClick={handleDownload} disabled={isExporting} className={`${chipClassName} disabled:opacity-60`}>
+          {isExporting ? "Preparing…" : "Download edited .glb"}
+        </button>
+      </div>
       {exportFailed && (
         <p role="alert" className="max-w-56 font-mono text-3xs text-faint">
           Couldn&apos;t export the model — try again.
