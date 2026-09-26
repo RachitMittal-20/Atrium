@@ -152,6 +152,19 @@
  * hover/tourIndex to a clean slate — "nothing stale leaks across
  * models," including across two different uploads in the same session.
  *
+ * customSessionId is the newer half of this feature — realtime sync for a
+ * custom-model session (src/lib/customRealtime.ts,
+ * CustomRealtimeProvider.tsx). It's null whenever customModelUrl came
+ * from uploadCustomModel failing (Supabase unreachable, upload error) and
+ * setCustomModel fell back to a plain local blob URL — there is nothing a
+ * second tab could join in that case, so the whole broadcast layer stays
+ * off rather than opening a channel for a session no URL ever shares.
+ * When it IS set, it's also the Storage path's own directory
+ * (src/lib/customModelUpload.ts) and the broadcast channel's topic
+ * (`custom-session:<id>`) — one id serving three roles rather than three
+ * ids that would have to be kept in sync, since there is deliberately no
+ * database row for a custom-model session to hang a foreign key off of.
+ *
  * `hiddenElementIds` is element visibility: the meshNames currently
  * hidden from the 3D scene. Unlike the viewport bridge above this *is*
  * tracked state, deliberately — hiding something has to re-render both
@@ -495,13 +508,20 @@ interface ProjectState {
   clearPendingCustomPin: () => void;
   /**
    * Every comment pinned against the currently-active custom model —
-   * purely client-side, in-memory, never persisted or synced (see this
-   * field's own comment for why: there is no real Project/Element row
-   * anywhere to attach a Supabase annotations row to). Reset to empty by
-   * CUSTOM_MODEL_RESET on every model switch, the same "nothing stale
-   * leaks across models" reason hiddenElementIds/elementColors already
-   * are — a previous upload's pinned points mean nothing against a
-   * freshly-loaded scene's own geometry.
+   * still never persisted to any database (there is no real Project/
+   * Element row anywhere to attach a Supabase annotations row to), but no
+   * longer purely local either: when the active session reached Storage
+   * (customSessionId is non-null), CustomRealtimeProvider.tsx broadcasts
+   * each new pin to every other tab on the same session's channel, and
+   * this array is exactly what a late joiner's state-request handshake
+   * replies with (see customRealtime.ts). "Not persisted" and "not
+   * synced" are two different properties — this gave up the first a
+   * while ago in spirit (it was always ephemeral) but only just gave up
+   * the second. Reset to empty by CUSTOM_MODEL_RESET on every model
+   * switch, the same "nothing stale leaks across models" reason
+   * hiddenElementIds/elementColors already are — a previous upload's
+   * pinned points mean nothing against a freshly-loaded scene's own
+   * geometry.
    */
   customAnnotations: CustomAnnotation[];
   /**
@@ -510,19 +530,47 @@ interface ProjectState {
    * the custom-model equivalent of pinAnnotation. No optimistic-then-
    * persist-then-roll-back shape here: there is nothing to persist, so
    * this is a plain synchronous append, not the async two-phase write
-   * pinAnnotation needs. No replies, unlike the curated model's
-   * AnnotationReply thread — a deliberate cut, not a deferral: replies
-   * exist so a design team can discuss a comment over the life of a real
-   * project, which has no equivalent for a preview that's gone on
-   * refresh; a flat list of comments already covers "leave a comment
-   * on this element," the actual ask this feature exists for.
+   * pinAnnotation needs. Returns the annotation it just created so the
+   * caller can also broadcast it (see customRealtime.ts's
+   * broadcastCustomAnnotation) — the store itself has no reference to
+   * whatever channel happens to be open, the same reason it doesn't call
+   * supabase directly for this path either. No replies, unlike the
+   * curated model's own AnnotationReply thread — a deliberate cut, not a
+   * deferral: replies exist so a design team can discuss a comment over
+   * the life of a real project, which has no equivalent for a preview
+   * that's gone on refresh; a flat list of comments already covers
+   * "leave a comment on this element," the actual ask this feature
+   * exists for.
    */
-  pinCustomAnnotation: (input: { meshName: string | null; position: Vec3; normal: Vec3; author: string; body: string }) => void;
+  pinCustomAnnotation: (input: {
+    meshName: string | null;
+    position: Vec3;
+    normal: Vec3;
+    author: string;
+    body: string;
+  }) => CustomAnnotation;
   /** Flips one custom annotation between Open/Resolved — the ephemeral
    *  equivalent of the curated model's own status field, with no
    *  Supabase write behind it for the identical "nothing to persist"
-   *  reason pinCustomAnnotation's own comment gives. */
+   *  reason pinCustomAnnotation's own comment gives. Local-only, not
+   *  broadcast — out of this round's stated sync scope (presence, pin
+   *  placement, comment content/authorship), so a status flip in one tab
+   *  doesn't (yet) appear in another's. */
   toggleCustomAnnotationStatus: (id: string) => void;
+  /** Applies one CustomAnnotation arriving from customRealtime.ts —
+   *  either a single "someone just pinned this" broadcast, or one entry
+   *  from a late joiner's full-state reply (see that module's own
+   *  header). Id-deduplicating, the same shape mergeRemoteAnnotation
+   *  already uses for the curated model: a no-op if this exact id is
+   *  already present, so replaying the full list a joiner's request
+   *  turns up doesn't double-insert whatever a concurrent single-pin
+   *  broadcast already delivered. Deliberately does NOT set
+   *  recentlyAddedAnnotationId itself, unlike mergeRemoteAnnotation —
+   *  this same action backs both a genuinely-new live pin (which should
+   *  flash) and a late joiner's bulk catch-up replay (which shouldn't
+   *  flash every pre-existing pin at once); CustomRealtimeProvider.tsx
+   *  sets the flash itself only on the live-broadcast path. */
+  mergeRemoteCustomAnnotation: (annotation: CustomAnnotation) => void;
 
   // --- Review list: hover bridge, new-row flash, mobile tab ---
   hoveredAnnotationId: string | null;
@@ -577,6 +625,12 @@ interface ProjectState {
   /** The uploaded file's own name, for CustomModelControl.tsx's "local
    *  preview" note — null exactly when customModelUrl is. */
   customModelName: string | null;
+  /** The shareable session id — see this interface's own header comment
+   *  for why one id covers the Storage path, the broadcast topic, and the
+   *  /project?session= URL. Null whenever the upload never reached
+   *  Storage (see customModelUpload.ts) and customModelUrl is a local-
+   *  only blob URL instead — a session nothing else could ever join. */
+  customSessionId: string | null;
   /** Every mesh UploadedModel.tsx found in the current custom model, in
    *  its own scene-graph traversal order — empty when no custom model is
    *  active. Populated once, in an effect, after that component mounts
@@ -620,7 +674,7 @@ interface ProjectState {
    * mid-walkthrough or mid-tour view tuned to the *previous* model's
    * scale has no reason to still make sense against the new one).
    */
-  setCustomModel: (url: string, name: string) => void;
+  setCustomModel: (url: string, name: string, sessionId: string | null) => void;
   /** Reverts to the curated apartment model — revokes customModelUrl and
    *  resets the exact same state setCustomModel does, for the identical
    *  "nothing stale leaks across models" reason. */
@@ -1126,6 +1180,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     // never briefly shows against a model that hasn't traversed yet.
     customModelUrl: null,
     customModelName: null,
+    customSessionId: null,
     uploadedElements: [],
     setUploadedElements: (elements) => set({ uploadedElements: elements }),
     renameUploadedElement: (meshName, updates) =>
@@ -1140,20 +1195,18 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     customAnnotations: [],
     pinCustomAnnotation: (input) => {
       const id = crypto.randomUUID();
+      const annotation: CustomAnnotation = {
+        id,
+        meshName: input.meshName,
+        position: input.position,
+        normal: input.normal,
+        author: input.author,
+        body: input.body,
+        createdAt: new Date().toISOString(),
+        status: "Open",
+      };
       set((state) => ({
-        customAnnotations: [
-          ...state.customAnnotations,
-          {
-            id,
-            meshName: input.meshName,
-            position: input.position,
-            normal: input.normal,
-            author: input.author,
-            body: input.body,
-            createdAt: new Date().toISOString(),
-            status: "Open",
-          },
-        ],
+        customAnnotations: [...state.customAnnotations, annotation],
         // Reuses the exact same recentlyAddedAnnotationId flash
         // pinAnnotation's own curated path already sets — it's compared
         // by plain string equality against whichever list a given
@@ -1162,6 +1215,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
         // both sides) and no second "which flash am I" field to keep in sync.
         recentlyAddedAnnotationId: id,
       }));
+      return annotation;
     },
     toggleCustomAnnotationStatus: (id) =>
       set((state) => ({
@@ -1171,17 +1225,39 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             : annotation,
         ),
       })),
+    mergeRemoteCustomAnnotation: (annotation) =>
+      set((state) => {
+        if (state.customAnnotations.some((existing) => existing.id === annotation.id)) return state;
+        return { customAnnotations: [...state.customAnnotations, annotation] };
+      }),
     customEyeHeightMeters: 1.65,
     setCustomEyeHeightMeters: (meters) => set({ customEyeHeightMeters: meters }),
-    setCustomModel: (url, name) =>
+    setCustomModel: (url, name, sessionId) =>
       set((state) => {
+        // A no-op if the previous customModelUrl was a real Storage URL
+        // rather than a blob: one (revokeObjectURL silently ignores any
+        // URL it didn't itself mint) — safe to call unconditionally
+        // either way, so this doesn't need to branch on whether the
+        // previous session ever reached Storage.
         if (state.customModelUrl) URL.revokeObjectURL(state.customModelUrl);
-        return { ...CUSTOM_MODEL_RESET, customModelUrl: url, customModelName: name, uploadedElements: [] };
+        return {
+          ...CUSTOM_MODEL_RESET,
+          customModelUrl: url,
+          customModelName: name,
+          customSessionId: sessionId,
+          uploadedElements: [],
+        };
       }),
     clearCustomModel: () =>
       set((state) => {
         if (state.customModelUrl) URL.revokeObjectURL(state.customModelUrl);
-        return { ...CUSTOM_MODEL_RESET, customModelUrl: null, customModelName: null, uploadedElements: [] };
+        return {
+          ...CUSTOM_MODEL_RESET,
+          customModelUrl: null,
+          customModelName: null,
+          customSessionId: null,
+          uploadedElements: [],
+        };
       }),
 
     getElementByMeshId: (meshId) => get().elements.find((element) => element.meshName === meshId),

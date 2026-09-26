@@ -23,22 +23,34 @@
  * House" — just not this initial trigger). This is the moment a visitor
  * actually decides which model they're looking at, so the choice lives
  * here instead of being discovered after the fact inside the tool.
- * Selecting a file sets projectStore's customModelUrl directly (the same
- * action CustomModelControl's own file input always called) and then
- * navigates to /project — the store is a module-level singleton, so a
- * client-side route change (router.push, not a full reload) carries that
- * state across straight through, the same way ProjectHydrator's own
- * hydrate() never touches customModelUrl and so never clobbers it either.
+ * Selecting a file uploads it to Supabase Storage first (see
+ * src/lib/customModelUpload.ts and the migration that provisions its
+ * bucket) so a session id exists that a second browser tab could later
+ * join — real backend work this feature didn't need before, now that a
+ * custom-model session can be shared, not just previewed solo. If that
+ * upload fails for any reason (Supabase unreachable, a network error),
+ * this falls back to the original local-only blob URL: the preview still
+ * works for the one tab that uploaded it, it just isn't shareable, the
+ * same "degrade instead of break" shape src/app/project/page.tsx's own
+ * loadInitialData already follows. Either way this sets projectStore's
+ * customModelUrl (the same action CustomModelControl's own file input
+ * always called) and then navigates to /project, appending ?session=
+ * &name= to the URL only when the upload actually succeeded — the store
+ * is a module-level singleton, so a client-side route change (router.push,
+ * not a full reload) carries that state across straight through, the same
+ * way ProjectHydrator's own hydrate() never touches customModelUrl and so
+ * never clobbers it either.
  */
 "use client";
 
-import { useLayoutEffect, useRef, type ChangeEvent } from "react";
+import { useLayoutEffect, useRef, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import gsap from "gsap";
 import { SplitText } from "gsap/SplitText";
 import { Button, buttonClassName } from "@/components/ui/Button";
 import { useProjectStore } from "@/store/projectStore";
 import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
+import { uploadCustomModel } from "@/lib/customModelUpload";
 
 // Matches CustomModelControl.tsx's own file input — see that file's
 // header for why .glb/.gltf only and no drag-and-drop.
@@ -49,16 +61,30 @@ export function Invitation() {
   const buttonWrapRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const setCustomModel = useProjectStore((state) => state.setCustomModel);
+  // A real, new latency this feature introduces — a local blob URL was
+  // instant, an upload isn't. Surfaced here rather than left silent so a
+  // multi-second gap before /project doesn't read as a stuck click.
+  const [isUploading, setIsUploading] = useState(false);
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     // Cleared unconditionally, matching CustomModelControl.tsx's own
     // handler — without this, picking the same filename twice in a row
     // wouldn't fire a second change event.
     event.target.value = "";
     if (!file) return;
-    setCustomModel(URL.createObjectURL(file), file.name);
-    router.push("/project");
+
+    setIsUploading(true);
+    const uploaded = await uploadCustomModel(file);
+    setIsUploading(false);
+
+    if (uploaded) {
+      setCustomModel(uploaded.url, file.name, uploaded.sessionId);
+      router.push(`/project?session=${uploaded.sessionId}&name=${encodeURIComponent(file.name)}`);
+    } else {
+      setCustomModel(URL.createObjectURL(file), file.name, null);
+      router.push("/project");
+    }
   };
 
   useLayoutEffect(() => {
@@ -108,9 +134,17 @@ export function Invitation() {
         <Button href="/project" variant="primary">
           Enter Project
         </Button>
-        <label className={`cursor-pointer ${buttonClassName("ghost")}`}>
-          Try your own model
-          <input type="file" accept={ACCEPTED_EXTENSIONS} onChange={handleFileChange} className="sr-only" />
+        <label
+          className={`${isUploading ? "pointer-events-none opacity-60" : "cursor-pointer"} ${buttonClassName("ghost")}`}
+        >
+          {isUploading ? "Uploading…" : "Try your own model"}
+          <input
+            type="file"
+            accept={ACCEPTED_EXTENSIONS}
+            onChange={handleFileChange}
+            disabled={isUploading}
+            className="sr-only"
+          />
         </label>
       </div>
     </section>
