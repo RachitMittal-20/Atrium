@@ -17,6 +17,7 @@ import {
   type RoomMap,
   type WallMask,
 } from "@/types/blueprint";
+import { guessRoomNames } from "./furniture";
 
 /** Warm, muted floor colours handed out to rooms in order. */
 export const ROOM_COLORS = [
@@ -118,7 +119,12 @@ export function layoutFromImage(
     return { name: `Room ${room.id}`, color: roomColor(idx), rects };
   });
 
-  return { wallHeight, walls: wallRects, rooms: rooms.filter((r) => r.rects.length > 0) };
+  const kept = rooms.filter((r) => r.rects.length > 0);
+  // The image carries no labels, so start from a guess; the dialog lets
+  // the person rename every room before the model is built.
+  const guesses = guessRoomNames(kept);
+  kept.forEach((room, i) => { room.name = guesses[i]; });
+  return { wallHeight, walls: wallRects, rooms: kept };
 }
 
 // ---------------------------------------------------------------- manual
@@ -241,5 +247,5 @@ export function layoutFromManual(spec: ManualPlanSpec): PlanLayout {
     color: roomColor(i),
     rects: [shift(r)],
   }));
-  return { wallHeight: spec.wallHeight, walls: walls.map(shift), rooms };
+  return { wallHeight: spec.wallHeight, wallThickness: t, walls: walls.map(shift), rooms };
 }

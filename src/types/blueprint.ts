@@ -110,6 +110,11 @@ export interface PlanRoom {
  *  one of these, so there is exactly one place that makes geometry. */
 export interface PlanLayout {
   wallHeight: number;
+  /** Wall thickness in metres when every wall shares one (the manual
+   *  form); room rectangles then run to wall centre-lines and furniture
+   *  is inset by half of it. Omitted for image plans, whose room
+   *  rectangles already stop at the wall's inner face. */
+  wallThickness?: number;
   /** Solid wall pieces, standing from the floor up to wallHeight. */
   walls: MetreRect[];
   rooms: PlanRoom[];
@@ -139,4 +144,29 @@ export interface ManualPlanSpec {
   /** Wall thickness in metres. */
   wallThickness: number;
   rooms: ManualRoomSpec[];
+}
+
+/** What a room is used for — decides which furniture goes in it. */
+export type RoomKind = "bedroom" | "living" | "kitchen" | "bathroom" | "dining" | "study" | "other";
+
+/** One axis-aligned box of a furniture piece, in metres, with its own
+ *  colour so a piece can be multi-toned inside a single mesh. */
+export interface FurnitureBox {
+  x0: number;
+  y0: number;
+  z0: number;
+  x1: number;
+  y1: number;
+  z1: number;
+  /** CSS hex colour. */
+  color: string;
+}
+
+/** A placed piece of furniture, already in plan coordinates (metres). */
+export interface FurnitureItem {
+  /** Unique display name, e.g. "Bedroom Bed". */
+  name: string;
+  /** Category stored on the exported mesh. */
+  category: "Furniture" | "Fixture";
+  boxes: FurnitureBox[];
 }
