@@ -181,9 +181,37 @@ import { HDRI_STUDIO_PATH } from "@/lib/assets";
 import { useScrollStore } from "@/store/scrollStore";
 import { useProjectStore } from "@/store/projectStore";
 
-// Matches --color-ground in src/app/globals.css — the canvas clear colour
-// has to be a real JS value, not a CSS variable, so it's restated here.
+// Matches --color-ground in src/app/globals.css — restated here for the
+// one line below still passing a color value to the WebGL clear call
+// (see its own comment for why that value no longer actually paints
+// anything).
 const GROUND_COLOR = "#0A0B0C";
+
+// The fix for a real, reported visual bug, not a taste change: the model
+// casts a soft ContactShadows shadow onto an implied floor, but the
+// Canvas used to clear to a flat, uniform GROUND_COLOR fill — same value
+// at the shadow's edge as at the far corners of the viewport, so the
+// shadow read as pointing at nothing rather than landing on a surface.
+// Confirmed identical for both model paths (BuildingModel and
+// UploadedModel both render inside this same Scene(), never a per-model
+// Canvas of their own — see this file's own header), so the fix belongs
+// here, once, rather than duplicated per caller.
+//
+// A radial gradient — near-black at the edges (--color-ground itself,
+// #0a0b0c) lifting to a touch lighter at the centre (--color-surface,
+// #131518, the same "raised panel" tone globals.css already uses
+// elsewhere, not a new colour invented for this) — reads as an
+// intentional, softly lit floor the shadow can plausibly sit on, still
+// well inside ATRIUM's own dark register rather than a bright studio-
+// product-shot backdrop. Lives on a plain CSS background behind the
+// Canvas, not as WebGL geometry/a shader: the Canvas below renders with
+// alpha:true and a fully transparent clear color specifically so this
+// shows through evenly across the whole viewport, including past the
+// model's own silhouette — a CSS background can't be occluded by
+// anything drawn in the scene, so there's no risk of it clipping oddly
+// against the model's own edges the way a WebGL-space gradient plane
+// might.
+const BACKGROUND_GRADIENT = `radial-gradient(ellipse at center, var(--color-surface) 0%, var(--color-ground) 70%)`;
 
 // Known software (CPU) WebGL renderer strings — never real GPU
 // acceleration. This is the exact identity check docs/PERFORMANCE.md's
@@ -598,35 +626,50 @@ export function Scene({ className }: SceneProps) {
   const [maxDpr] = useState(detectMaxDpr);
 
   return (
-    <Canvas
-      className={className}
-      dpr={[1, maxDpr]}
-      frameloop="demand"
-      gl={{ antialias: true, alpha: false }}
-      onCreated={(state) => {
-        state.gl.toneMapping = THREE.ACESFilmicToneMapping;
-        state.gl.outputColorSpace = THREE.SRGBColorSpace;
-        state.gl.setClearColor(new THREE.Color(GROUND_COLOR), 1);
-      }}
-      // Fires only when a click hits nothing — every mesh's own onClick
-      // already stops propagation, so this is exactly "clicked the empty
-      // background," the deselect gesture.
-      onPointerMissed={() => useProjectStore.getState().clearSelected()}
-    >
-      <InvalidateOnScroll />
+    // The radial-gradient background this whole component sits inside —
+    // see BACKGROUND_GRADIENT's own comment for why it lives here (one
+    // wrapper, identical for every caller) rather than being duplicated
+    // per page. The Canvas below renders with alpha:true and a fully
+    // transparent clear color specifically so this shows through evenly
+    // across the whole viewport, not just around the model's own silhouette.
+    <div className={className} style={{ background: BACKGROUND_GRADIENT }}>
+      <Canvas
+        className="h-full w-full"
+        dpr={[1, maxDpr]}
+        frameloop="demand"
+        gl={{ antialias: true, alpha: true }}
+        onCreated={(state) => {
+          state.gl.toneMapping = THREE.ACESFilmicToneMapping;
+          state.gl.outputColorSpace = THREE.SRGBColorSpace;
+          // Alpha 0, not the flat GROUND_COLOR fill this used before — see
+          // BACKGROUND_GRADIENT's own comment for the bug this fixes (a
+          // solid clear color reads as a flat void the model's own ground
+          // shadow has nothing to visually land on). The color argument is
+          // moot at alpha 0 (nothing opaque to tint), kept only so a
+          // future reader isn't left wondering what color an entirely
+          // removed call would have cleared to.
+          state.gl.setClearColor(new THREE.Color(GROUND_COLOR), 0);
+        }}
+        // Fires only when a click hits nothing — every mesh's own onClick
+        // already stops propagation, so this is exactly "clicked the empty
+        // background," the deselect gesture.
+        onPointerMissed={() => useProjectStore.getState().clearSelected()}
+      >
+        <InvalidateOnScroll />
 
-      {/* Lights the HDRI beneath, not the star of the shot: low intensity
-          key + an even dimmer rim, mostly there to keep edges legible. */}
-      <directionalLight position={KEY_LIGHT_POSITION} intensity={0.6} />
-      <directionalLight position={RIM_LIGHT_POSITION} intensity={0.2} />
+        {/* Lights the HDRI beneath, not the star of the shot: low intensity
+            key + an even dimmer rim, mostly there to keep edges legible. */}
+        <directionalLight position={KEY_LIGHT_POSITION} intensity={0.6} />
+        <directionalLight position={RIM_LIGHT_POSITION} intensity={0.2} />
 
-      {/* Lights the model via image-based lighting without rendering as a
-          visible skybox behind it. */}
-      <Environment files={HDRI_STUDIO_PATH} background={false} />
+        {/* Lights the model via image-based lighting without rendering as a
+            visible skybox behind it. */}
+        <Environment files={HDRI_STUDIO_PATH} background={false} />
 
-      <Suspense fallback={null}>
-        <Model />
-      </Suspense>
-    </Canvas>
+        <Suspense fallback={null}>
+          <Model />
+        </Suspense>
+      </Canvas>
+    </div>
   );
 }
