@@ -95,15 +95,20 @@
  * be the last time the effect ran, so removing an override (Reset to
  * original) always lands back on the model's real starting color.
  *
- * Still no pin-mode branch — pinning a comment against a custom model is
- * a separate, not-yet-built piece of work (it needs its own ephemeral
- * annotation state, entirely apart from the curated model's Supabase-
- * backed `annotations`), tracked separately rather than half-wired in
- * here. A click always just selects, regardless of projectStore's
- * `mode` — if the reviewer happens to still be in pin mode from viewing
- * the curated model, clicking a custom-model mesh selects it instead of
- * silently doing nothing, which reads as "this still works," not
- * "pinning quietly failed."
+ * Pin mode now has a real branch, mirroring BuildingModel.tsx's own
+ * handleClick: raycasts the click into a world point + surface normal
+ * and hands them to projectStore as pendingCustomPin, which
+ * UploadedAnnotationComposer.tsx (rendered below, a sibling of this
+ * file's own <primitive>) turns into a real CustomAnnotation — see that
+ * store field's own comment for why this is an entirely separate,
+ * ephemeral parallel to pendingPin/`annotations` rather than reusing
+ * them. No MESH_ROTATION-style conversion needed the way BuildingModel's
+ * own handler has: that file's meshGroupRef applies a fixed rotation
+ * every MESH_ENTRIES mesh sits under, which a captured normal has to be
+ * converted into; clonedScene here carries no equivalent fixed rotation
+ * (it's rendered as a bare <primitive>, not nested under any rotated
+ * wrapper group), so event.face's world-space normal is already the
+ * frame the composer/marker need.
  */
 "use client";
 
@@ -115,6 +120,8 @@ import { useThree, type ThreeEvent } from "@react-three/fiber";
 import gsap from "gsap";
 import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
 import { useProjectStore, type UploadedElement } from "@/store/projectStore";
+import { UploadedAnnotationMarker } from "./UploadedAnnotationMarker";
+import { UploadedAnnotationComposer } from "./UploadedAnnotationComposer";
 
 // Mirrors BuildingModel.tsx's own brass hex values exactly, restated here
 // rather than shared-imported — both files already restate small,
@@ -182,6 +189,8 @@ export function UploadedModel({ url }: UploadedModelProps) {
   // for its own identical reads.
   const hiddenElementIds = useProjectStore((state) => state.hiddenElementIds);
   const elementColors = useProjectStore((state) => state.elementColors);
+  const customAnnotations = useProjectStore((state) => state.customAnnotations);
+  const pendingCustomPin = useProjectStore((state) => state.pendingCustomPin);
 
   // See file header for why this clone exists and why materials (not
   // geometry) get individually cloned again inside it below.
@@ -362,13 +371,28 @@ export function UploadedModel({ url }: UploadedModelProps) {
     tweenEmissive(mesh, 0, invalidate);
   };
 
-  // See file header for why this never branches on pin mode the way
-  // BuildingModel.tsx's own click handler does.
+  // See file header for the pin-mode branch and why it needs no
+  // MESH_ROTATION-style conversion the way BuildingModel.tsx's own
+  // handler does.
   const handleClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation();
     if (useProjectStore.getState().cameraMode === "tour") return;
     const meshName = event.object.userData.meshName as string | undefined;
     if (!meshName) return;
+
+    const state = useProjectStore.getState();
+    if (state.mode === "pin") {
+      const normal = event.face
+        ? event.face.normal.clone().transformDirection(event.object.matrixWorld).normalize()
+        : new THREE.Vector3(0, 1, 0);
+      state.setPendingCustomPin({
+        position: [event.point.x, event.point.y, event.point.z],
+        normal: [normal.x, normal.y, normal.z],
+        meshName,
+      });
+      return;
+    }
+
     setSelected(meshName);
   };
 
@@ -417,6 +441,11 @@ export function UploadedModel({ url }: UploadedModelProps) {
           />
         </EffectComposer>
       )}
+
+      {customAnnotations.map((annotation, index) => (
+        <UploadedAnnotationMarker key={annotation.id} annotation={annotation} number={index + 1} />
+      ))}
+      {pendingCustomPin && <UploadedAnnotationComposer pendingPin={pendingCustomPin} />}
     </>
   );
 }

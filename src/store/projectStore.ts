@@ -236,6 +236,7 @@ import { ELEMENTS, ANNOTATIONS, ELEMENT_REVISIONS, PROJECT } from "@/data/projec
 import type {
   Annotation,
   AnnotationReply,
+  AnnotationStatus,
   Element,
   ElementCategory,
   ElementColorOverride,
@@ -305,6 +306,35 @@ export interface UploadedElement {
    *  category," not a sixth pseudo-category needing its own handling
    *  anywhere else. */
   category: ElementCategory | null;
+}
+
+/**
+ * A comment pinned in 3D space against a custom (uploaded) model —
+ * UploadedModel.tsx's own equivalent of Annotation, deliberately not
+ * that type: there is no real Project/Element row anywhere for an
+ * uploaded mesh (see UploadedElement's own comment for the identical
+ * reasoning), so `elementId` here is a plain meshName string instead of
+ * a foreign key, `replies`/database-shaped fields are dropped entirely
+ * (see pinCustomAnnotation's own comment for why replies specifically
+ * were cut, not just deferred), and nothing here is ever written to
+ * Supabase or synced over realtime — see customAnnotations' own comment
+ * on ProjectState for the full "why ephemeral" reasoning. Reuses
+ * AnnotationStatus (Open/Resolved) from src/types/project.ts rather than
+ * inventing a second status enum for the identical two states.
+ */
+export interface CustomAnnotation {
+  id: string;
+  /** null when pinned to open space rather than a specific mesh — same
+   *  meaning as Annotation.elementId being null, just keyed by meshName
+   *  instead of a database id (there is no Element row to point at). */
+  meshName: string | null;
+  position: Vec3;
+  normal: Vec3;
+  author: string;
+  body: string;
+  /** ISO date string. */
+  createdAt: string;
+  status: AnnotationStatus;
 }
 
 export interface HydrationData {
@@ -451,6 +481,48 @@ interface ProjectState {
   /** Drops the captured point without leaving pin mode — "wrong spot,
    *  let me click again" rather than "get me out of this entirely". */
   clearPendingPin: () => void;
+
+  // --- Spatial annotation for a custom model — see customAnnotations'
+  // own comment below for why this is a fully parallel set of state
+  // rather than reusing pendingPin/setPendingPin/clearPendingPin: `mode`
+  // itself (above) is shared — pin mode is pin mode regardless of which
+  // model is mounted — but a *captured point* has a different meaning
+  // (no Element row to eventually attach to), so it gets its own field
+  // instead of pendingPin sometimes meaning one thing and sometimes
+  // another depending on customModelUrl.
+  pendingCustomPin: PendingPin | null;
+  setPendingCustomPin: (pin: PendingPin) => void;
+  clearPendingCustomPin: () => void;
+  /**
+   * Every comment pinned against the currently-active custom model —
+   * purely client-side, in-memory, never persisted or synced (see this
+   * field's own comment for why: there is no real Project/Element row
+   * anywhere to attach a Supabase annotations row to). Reset to empty by
+   * CUSTOM_MODEL_RESET on every model switch, the same "nothing stale
+   * leaks across models" reason hiddenElementIds/elementColors already
+   * are — a previous upload's pinned points mean nothing against a
+   * freshly-loaded scene's own geometry.
+   */
+  customAnnotations: CustomAnnotation[];
+  /**
+   * Turns a captured pendingCustomPin into a real (if ephemeral)
+   * CustomAnnotation — UploadedAnnotationComposer.tsx's one write path,
+   * the custom-model equivalent of pinAnnotation. No optimistic-then-
+   * persist-then-roll-back shape here: there is nothing to persist, so
+   * this is a plain synchronous append, not the async two-phase write
+   * pinAnnotation needs. No replies, unlike the curated model's
+   * AnnotationReply thread — a deliberate cut, not a deferral: replies
+   * exist so a design team can discuss a comment over the life of a real
+   * project, which has no equivalent for a preview that's gone on
+   * refresh; a flat list of comments already covers "leave a comment
+   * on this element," the actual ask this feature exists for.
+   */
+  pinCustomAnnotation: (input: { meshName: string | null; position: Vec3; normal: Vec3; author: string; body: string }) => void;
+  /** Flips one custom annotation between Open/Resolved — the ephemeral
+   *  equivalent of the curated model's own status field, with no
+   *  Supabase write behind it for the identical "nothing to persist"
+   *  reason pinCustomAnnotation's own comment gives. */
+  toggleCustomAnnotationStatus: (id: string) => void;
 
   // --- Review list: hover bridge, new-row flash, mobile tab ---
   hoveredAnnotationId: string | null;
@@ -745,6 +817,11 @@ const CUSTOM_MODEL_RESET = {
   // would otherwise hide or recolor the wrong thing on the new model.
   hiddenElementIds: new Set<string>(),
   elementColors: new Map<string, string>(),
+  // Same reasoning again for the two custom-pin fields — a captured but
+  // unsubmitted point, or a pinned comment, from a previous upload has no
+  // meaning against a freshly-loaded scene's own geometry.
+  pendingCustomPin: null,
+  customAnnotations: [],
 } as const satisfies Partial<ProjectState>;
 
 export const useProjectStore = create<ProjectState>((set, get) => {
@@ -1045,6 +1122,34 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       set((state) => ({
         uploadedElements: state.uploadedElements.map((element) =>
           element.meshName === meshName ? { ...element, ...updates } : element,
+        ),
+      })),
+    pendingCustomPin: null,
+    setPendingCustomPin: (pin) => set({ pendingCustomPin: pin }),
+    clearPendingCustomPin: () => set({ pendingCustomPin: null }),
+    customAnnotations: [],
+    pinCustomAnnotation: (input) =>
+      set((state) => ({
+        customAnnotations: [
+          ...state.customAnnotations,
+          {
+            id: crypto.randomUUID(),
+            meshName: input.meshName,
+            position: input.position,
+            normal: input.normal,
+            author: input.author,
+            body: input.body,
+            createdAt: new Date().toISOString(),
+            status: "Open",
+          },
+        ],
+      })),
+    toggleCustomAnnotationStatus: (id) =>
+      set((state) => ({
+        customAnnotations: state.customAnnotations.map((annotation) =>
+          annotation.id === id
+            ? { ...annotation, status: annotation.status === "Open" ? "Resolved" : "Open" }
+            : annotation,
         ),
       })),
     customEyeHeightMeters: 1.65,

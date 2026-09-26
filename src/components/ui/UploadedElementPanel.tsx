@@ -239,7 +239,7 @@ export function UploadedElementPanel() {
             </p>
           </div>
 
-          <div className="border-t border-rule px-6 py-5">
+          <div className="flex flex-col gap-2 border-t border-rule px-6 py-5">
             <Button
               type="button"
               variant="ghost"
@@ -248,6 +248,14 @@ export function UploadedElementPanel() {
               onClick={() => toggleElementVisibility(element.meshName)}
             >
               {isHidden ? "Show element" : "Hide element"}
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              className="w-full"
+              onClick={() => useProjectStore.getState().enterPinMode()}
+            >
+              Pin a comment
             </Button>
           </div>
         </motion.div>

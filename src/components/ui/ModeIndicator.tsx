@@ -13,6 +13,14 @@
  * "c" into AnnotationComposer's fields must not toggle the mode). Escape
  * always runs — it's the documented way out of pin mode from anywhere,
  * composer open or not.
+ *
+ * The centred hint checks *both* pendingPin and pendingCustomPin, not
+ * just the curated one — `mode` itself is shared state (see
+ * projectStore.ts's own comment on why pin mode isn't duplicated per
+ * model), but which of the two pending-pin fields actually gets set
+ * depends on which model is mounted. Checking only pendingPin would leave
+ * this hint visibly stuck on screen after a custom-model click already
+ * captured a point into pendingCustomPin instead.
  */
 "use client";
 
@@ -23,6 +31,7 @@ import { isTypingTarget } from "@/lib/keyboard";
 export function ModeIndicator() {
   const mode = useProjectStore((state) => state.mode);
   const pendingPin = useProjectStore((state) => state.pendingPin);
+  const pendingCustomPin = useProjectStore((state) => state.pendingCustomPin);
 
   // Cursor is mode-wide, not per-mesh — BuildingModel's own hover handlers
   // stand down while mode is "pin" (see its handlePointerOver/Out) so this
@@ -63,7 +72,7 @@ export function ModeIndicator() {
         </span>
       </div>
 
-      {mode === "pin" && !pendingPin && (
+      {mode === "pin" && !pendingPin && !pendingCustomPin && (
         <div className="pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 sm:top-8">
           <span className="whitespace-nowrap bg-ground/80 px-3 py-1.5 font-mono text-3xs uppercase tracking-[0.18em] text-brass">
             Click anywhere on the model to pin a comment
