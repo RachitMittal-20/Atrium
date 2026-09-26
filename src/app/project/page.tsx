@@ -22,6 +22,10 @@
  * (`elements` vs. `uploadedElements`) already finds nothing for the
  * other model's selection and stays closed, so at most one is ever open
  * regardless of which model is mounted — see UploadedElementPanel.tsx's
+ * own header. ReviewList and UploadedReviewList are the same pairing for
+ * the comments list, except each one DOES gate on customModelUrl itself
+ * (there's no "lookup finds nothing" fallback for a whole panel the way
+ * there is for a single selected element) — see UploadedReviewList.tsx's
  * own header.
  *
  * A Server Component, not a client one: loadInitialData below runs on
@@ -58,6 +62,7 @@ import { VisibilityToolbar } from "@/components/ui/VisibilityToolbar";
 import { TourHud } from "@/components/ui/TourHud";
 import { CustomModelControl } from "@/components/ui/CustomModelControl";
 import { ReviewList } from "@/components/ui/ReviewList";
+import { UploadedReviewList } from "@/components/ui/UploadedReviewList";
 import { DemoDataBadge } from "@/components/ui/DemoDataBadge";
 import { Toast } from "@/components/ui/Toast";
 import { RemoteCommentToast } from "@/components/ui/RemoteCommentToast";
@@ -124,6 +129,7 @@ export default async function ProjectPage() {
         <VisibilityToolbar />
         <CustomModelControl />
         <ReviewList />
+        <UploadedReviewList />
         <ElementPanel />
         <UploadedElementPanel />
         <DemoDataBadge />

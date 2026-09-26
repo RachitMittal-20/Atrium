@@ -1138,12 +1138,13 @@ export const useProjectStore = create<ProjectState>((set, get) => {
     setPendingCustomPin: (pin) => set({ pendingCustomPin: pin }),
     clearPendingCustomPin: () => set({ pendingCustomPin: null }),
     customAnnotations: [],
-    pinCustomAnnotation: (input) =>
+    pinCustomAnnotation: (input) => {
+      const id = crypto.randomUUID();
       set((state) => ({
         customAnnotations: [
           ...state.customAnnotations,
           {
-            id: crypto.randomUUID(),
+            id,
             meshName: input.meshName,
             position: input.position,
             normal: input.normal,
@@ -1153,7 +1154,15 @@ export const useProjectStore = create<ProjectState>((set, get) => {
             status: "Open",
           },
         ],
-      })),
+        // Reuses the exact same recentlyAddedAnnotationId flash
+        // pinAnnotation's own curated path already sets — it's compared
+        // by plain string equality against whichever list a given
+        // AnnotationRows-family component happens to render, so one field
+        // covers both id spaces with no risk of collision (crypto.randomUUID()
+        // both sides) and no second "which flash am I" field to keep in sync.
+        recentlyAddedAnnotationId: id,
+      }));
+    },
     toggleCustomAnnotationStatus: (id) =>
       set((state) => ({
         customAnnotations: state.customAnnotations.map((annotation) =>
