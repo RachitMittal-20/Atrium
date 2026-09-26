@@ -20,6 +20,18 @@
  * reason, rather than this component pretending to be live with an empty
  * channel.
  *
+ * Also skips subscribing whenever a custom model is active
+ * (projectStore's customModelUrl) — CustomRealtimeProvider.tsx owns that
+ * case instead, on its own broadcast/presence channel, but writes to
+ * these exact same presentReviewers/selfReviewerId/connectionStatus
+ * fields rather than a parallel set (only one model is ever mounted at a
+ * time, the same reasoning hoveredElementId/selectedElementId's own
+ * reuse across both models already follows — see projectStore.ts's
+ * header). Without this guard, both providers would be subscribed
+ * simultaneously and race to overwrite each other's presence state
+ * whenever a custom model happened to be active while this project's own
+ * Postgres channel was still open underneath it.
+ *
  * The reviewer identity (self) is generated once via useState's lazy
  * initializer — during render, but that's safe here specifically because
  * generateReviewer() only calls crypto.randomUUID()/Math.random(), never
@@ -40,8 +52,10 @@ interface RealtimeProviderProps {
 export function RealtimeProvider({ projectId, isDemoData }: RealtimeProviderProps) {
   const [self] = useState(generateReviewer);
 
+  const customModelUrl = useProjectStore((state) => state.customModelUrl);
+
   useEffect(() => {
-    if (isDemoData) return;
+    if (isDemoData || customModelUrl) return;
 
     useProjectStore.getState().setSelfReviewer(self.id);
 
@@ -56,7 +70,7 @@ export function RealtimeProvider({ projectId, isDemoData }: RealtimeProviderProp
     });
 
     return unsubscribe;
-  }, [projectId, isDemoData, self]);
+  }, [projectId, isDemoData, customModelUrl, self]);
 
   return null;
 }

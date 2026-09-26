@@ -13,12 +13,15 @@
  * used directly in whatever local space <Center> already establishes,
  * with no conversion step.
  *
- * No remote-arrival pulse animation, unlike AnnotationMarker — there is
- * no realtime layer for a custom model yet (see projectStore.ts's own
- * comment on customAnnotations), so nothing ever arrives from anywhere
- * but this browser tab's own pin flow; every marker here mounts in its
- * resting state from the start. Distance-based scaling and hover
- * highlighting are otherwise the same as the curated marker.
+ * No remote-arrival pulse animation, unlike AnnotationMarker — a custom
+ * model session does now have a realtime layer (customRealtime.ts,
+ * CustomRealtimeProvider.tsx), so a pin genuinely can arrive here from
+ * another tab, not just this browser's own pin flow; the pulse itself is
+ * simply a cosmetic cut for this round, not something the sync layer
+ * makes impossible. Every marker here still mounts straight into its
+ * resting state regardless of where its annotation came from. Distance-
+ * based scaling and hover highlighting are otherwise the same as the
+ * curated marker.
  *
  * Ring/offset sizing is *not* copied as fixed absolute numbers the way
  * this file's first version did — that was a real, measured bug, not a

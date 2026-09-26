@@ -19,6 +19,13 @@
  * AnnotationComposer's own header gives — except here there's no network
  * round trip to not wait for either, since pinCustomAnnotation is a plain
  * synchronous append.
+ *
+ * Also broadcasts the just-created annotation over this session's
+ * realtime channel (customRealtime.ts), if one is open — a silent no-op
+ * when it isn't (Supabase unreachable, or this session never reached
+ * Storage and so has no one else who could be listening). pinCustomAnnotation
+ * now returns the annotation it created specifically so this call site can
+ * hand it straight to broadcastCustomAnnotation without re-deriving it.
  */
 "use client";
 
@@ -26,6 +33,7 @@ import { useMemo, useState } from "react";
 import * as THREE from "three";
 import { Html } from "@react-three/drei";
 import { useProjectStore, type PendingPin } from "@/store/projectStore";
+import { broadcastCustomAnnotation } from "@/lib/customRealtime";
 import { Label } from "@/components/ui/Label";
 import { Button } from "@/components/ui/Button";
 
@@ -47,13 +55,14 @@ export function UploadedAnnotationComposer({ pendingPin }: UploadedAnnotationCom
   const handleSubmit = () => {
     if (!canSubmit) return;
     const state = useProjectStore.getState();
-    state.pinCustomAnnotation({
+    const annotation = state.pinCustomAnnotation({
       meshName: pendingPin.meshName,
       position: pendingPin.position,
       normal: pendingPin.normal,
       author: author.trim(),
       body: body.trim(),
     });
+    broadcastCustomAnnotation(annotation);
     state.exitPinMode();
   };
 
