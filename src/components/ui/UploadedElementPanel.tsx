@@ -196,7 +196,7 @@ export function UploadedElementPanel() {
                     category: event.target.value === "" ? null : (event.target.value as ElementCategory),
                   })
                 }
-                className="border border-rule bg-ground px-3 py-2 font-mono text-2xs uppercase tracking-[0.1em] text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
+                className="border border-rule bg-ground px-3 py-2 font-mono text-2xs uppercase tracking-widest text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass"
               >
                 <option value="">Uncategorized</option>
                 {ELEMENT_CATEGORIES.map((category) => (
