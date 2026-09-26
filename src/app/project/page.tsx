@@ -28,6 +28,14 @@
  * there is for a single selected element) — see UploadedReviewList.tsx's
  * own header.
  *
+ * CustomModelJoin is the join-side half of a shareable custom-model
+ * session — mounted right alongside RealtimeProvider, but reads
+ * ?session=/?name= from this same route's own URL instead of a server
+ * prop, so it needs a <Suspense> boundary (useSearchParams' own App
+ * Router requirement) that RealtimeProvider doesn't. See its own header
+ * for why "hydrate from the URL if nothing's active yet" is enough to
+ * cover both a cold join and this same tab's own hard refresh.
+ *
  * A Server Component, not a client one: loadInitialData below runs on
  * the server, before this page ever reaches the browser. The wordmark
  * block's project label is rendered directly from that server-fetched
@@ -68,6 +76,9 @@ import { Toast } from "@/components/ui/Toast";
 import { RemoteCommentToast } from "@/components/ui/RemoteCommentToast";
 import { ProjectHydrator } from "@/components/ProjectHydrator";
 import { RealtimeProvider } from "@/components/RealtimeProvider";
+import { CustomRealtimeProvider } from "@/components/CustomRealtimeProvider";
+import { CustomModelJoin } from "@/components/CustomModelJoin";
+import { Suspense } from "react";
 import { getProject, getElements, getAnnotations, getColorOverrides } from "@/lib/queries";
 import { PROJECT, ELEMENTS, ANNOTATIONS } from "@/data/project";
 import type { HydrationData } from "@/store/projectStore";
@@ -111,6 +122,10 @@ export default async function ProjectPage() {
   return (
     <ProjectHydrator initial={initial}>
       <RealtimeProvider projectId={initial.project.id} isDemoData={initial.isDemoData} />
+      <CustomRealtimeProvider />
+      <Suspense fallback={null}>
+        <CustomModelJoin />
+      </Suspense>
       <main className="relative h-screen w-screen overflow-hidden bg-ground">
         <Scene className="h-full w-full" />
         <SceneLoader />
