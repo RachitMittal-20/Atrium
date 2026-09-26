@@ -40,6 +40,12 @@
  * not a full reload) carries that state across straight through, the same
  * way ProjectHydrator's own hydrate() never touches customModelUrl and so
  * never clobbers it either.
+ *
+ * A third choice, "Blueprint to 3D", sits beside "Try your own model": it
+ * opens BlueprintDialog, which generates a .glb from a floor-plan image
+ * or a manual room list and hands the File back here. That File then goes
+ * through the exact same openModelFile path as a picked .glb, so upload,
+ * sharing, colors, comments and download all work on a generated model.
  */
 "use client";
 
@@ -51,6 +57,7 @@ import { Button, buttonClassName } from "@/components/ui/Button";
 import { useProjectStore } from "@/store/projectStore";
 import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
 import { uploadCustomModel } from "@/lib/customModelUpload";
+import { BlueprintDialog } from "@/components/BlueprintDialog";
 
 // Matches CustomModelControl.tsx's own file input — see that file's
 // header for why .glb/.gltf only and no drag-and-drop.
@@ -65,15 +72,10 @@ export function Invitation() {
   // instant, an upload isn't. Surfaced here rather than left silent so a
   // multi-second gap before /project doesn't read as a stuck click.
   const [isUploading, setIsUploading] = useState(false);
+  const [isBlueprintOpen, setIsBlueprintOpen] = useState(false);
 
-  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    // Cleared unconditionally, matching CustomModelControl.tsx's own
-    // handler — without this, picking the same filename twice in a row
-    // wouldn't fire a second change event.
-    event.target.value = "";
-    if (!file) return;
-
+  // Shared by a picked .glb and a generated blueprint model.
+  const openModelFile = async (file: File) => {
     setIsUploading(true);
     const uploaded = await uploadCustomModel(file);
     setIsUploading(false);
@@ -85,6 +87,16 @@ export function Invitation() {
       setCustomModel(URL.createObjectURL(file), file.name, null);
       router.push("/project");
     }
+  };
+
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Cleared unconditionally, matching CustomModelControl.tsx's own
+    // handler — without this, picking the same filename twice in a row
+    // wouldn't fire a second change event.
+    event.target.value = "";
+    if (!file) return;
+    await openModelFile(file);
   };
 
   useLayoutEffect(() => {
@@ -146,7 +158,13 @@ export function Invitation() {
             className="sr-only"
           />
         </label>
+        <Button variant="ghost" type="button" onClick={() => setIsBlueprintOpen(true)} disabled={isUploading}>
+          Blueprint to 3D
+        </Button>
       </div>
+      {isBlueprintOpen ? (
+        <BlueprintDialog onClose={() => setIsBlueprintOpen(false)} onCreate={openModelFile} />
+      ) : null}
     </section>
   );
 }
