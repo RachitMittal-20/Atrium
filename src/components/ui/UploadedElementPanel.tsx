@@ -31,6 +31,18 @@
  * losing by debouncing or requiring an explicit commit; matches how the
  * curated model's own recolor swatches apply on click with no confirm
  * step either.
+ *
+ * Because rename writes on every keystroke, `element` (found by meshName
+ * in the store's uploadedElements array) is a brand-new object after each
+ * letter — renameUploadedElement replaces the array entry with a spread
+ * copy. The focus-management and Escape effects below therefore key on
+ * `elementKey` (the element's meshName, which a rename never changes)
+ * and not on `element` itself. Keying on the object was a real bug: the
+ * focus effect re-ran after every keystroke, its cleanup and setup both
+ * moved focus to the Close button, and the cursor left the Name field
+ * after a single letter. Keyed on meshName, those effects now run only
+ * when a *different* element is selected or the panel opens/closes —
+ * which is exactly when moving focus is wanted.
  */
 "use client";
 
@@ -82,6 +94,12 @@ export function UploadedElementPanel() {
     () => (customModelUrl ? (uploadedElements.find((candidate) => candidate.meshName === selectedElementId) ?? null) : null),
     [customModelUrl, uploadedElements, selectedElementId],
   );
+
+  // The stable identity of whichever element the panel is showing — see
+  // file header for why the effects below depend on this string and not
+  // on `element`, which changes identity on every rename keystroke.
+  const elementKey = element?.meshName ?? null;
+
   const isHidden = useProjectStore((state) => (element ? state.hiddenElementIds.has(element.meshName) : false));
   const elementColor = useProjectStore((state) => (element ? state.elementColors.get(element.meshName) : undefined));
 
@@ -91,24 +109,26 @@ export function UploadedElementPanel() {
 
   // Same focus-management and Escape-to-close behaviour as ElementPanel.tsx
   // — see that file's own comment for why this lives in an effect keyed
-  // on the element itself.
+  // on the element. Here it is keyed on elementKey (meshName), not the
+  // element object, so typing in the Name field never re-runs it — see
+  // file header.
   useEffect(() => {
-    if (!element) return;
+    if (elementKey === null) return;
     lastFocusedRef.current = document.activeElement as HTMLElement | null;
     closeButtonRef.current?.focus();
     return () => {
       lastFocusedRef.current?.focus();
     };
-  }, [element]);
+  }, [elementKey]);
 
   useEffect(() => {
-    if (!element) return;
+    if (elementKey === null) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") clearSelected();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [element, clearSelected]);
+  }, [elementKey, clearSelected]);
 
   const handleDragEnd = (_event: PointerEvent, info: PanInfo) => {
     if (info.offset.y > 120 || info.velocity.y > 500) clearSelected();
