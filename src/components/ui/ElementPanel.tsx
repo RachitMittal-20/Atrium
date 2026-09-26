@@ -86,6 +86,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { DURATION, PIN_BREAKPOINT } from "@/lib/motion";
 import { relativeTime } from "@/lib/format";
 import { useIsMobile } from "@/lib/responsive";
+import { usePanelScroll } from "@/lib/usePanelScroll";
 import { Label } from "./Label";
 import { Rule } from "./Rule";
 import { FieldRow } from "./FieldRow";
@@ -175,6 +176,17 @@ export function ElementPanel() {
   const setMobileTab = useProjectStore((state) => state.setMobileTab);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const lastFocusedRef = useRef<HTMLElement | null>(null);
+
+  // Measured (see usePanelScroll.ts's own header): this content column
+  // genuinely overflows even for a single element with just Color +
+  // Specification filled in — 1095px of real content against a ~660px
+  // available height at a typical 900px-tall viewport, not an artifact of
+  // rich test data. wrapperRef/contentRef are callback refs, not plain
+  // useRef objects — required here specifically, since this div only
+  // exists inside the `{element && (...)}` conditional below, not at
+  // ElementPanel's own top-level mount — see usePanelScroll.ts's header
+  // for the bug this avoids.
+  const { wrapperRef: scrollWrapperRef, contentRef: scrollContentRef } = usePanelScroll();
 
   // Move focus into the panel on open, and give it back to whatever had
   // focus before — Escape (below) and the close control both route through
@@ -270,7 +282,8 @@ export function ElementPanel() {
           {isMobile && mobileTab === "comments" ? (
             <AnnotationRows />
           ) : (
-            <div className="flex-1 overflow-y-auto px-6 pb-6">
+            <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
+              <div ref={scrollContentRef} className="px-6 pb-6">
               <h2 className="font-display text-lg text-ink">{element.name}</h2>
 
               <div className="mt-3 flex items-center gap-2">
@@ -414,6 +427,7 @@ export function ElementPanel() {
                   ))}
                 </ul>
               )}
+              </div>
             </div>
           )}
 

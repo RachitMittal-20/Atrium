@@ -67,6 +67,15 @@
  * over customAnnotations would fire both at once whenever any list is
  * visible. Left as a real, scoped-out gap: rows are still reachable by
  * click, just not by keyboard, for this round.
+ *
+ * The row list is wired to usePanelScroll.ts (Lenis, scoped to this one
+ * element, ticked off the shared gsap.ticker clock) — measured, not
+ * assumed: 3 real placed pins didn't overflow this panel's fixed height,
+ * but the same list widget crosses into real overflow around 6-7, a
+ * realistic count for one "try it out" sitting. UploadedElementPanel.tsx
+ * measured the opposite way (never overflows — its content is fixed and
+ * short by design) and stays on plain native scroll; see that file and
+ * usePanelScroll.ts's own headers for both measurements.
  */
 "use client";
 
@@ -76,6 +85,7 @@ import { useProjectStore, type CustomAnnotation } from "@/store/projectStore";
 import { DURATION, PIN_BREAKPOINT, annotationCameraTarget, easeCameraTo } from "@/lib/motion";
 import { relativeTime } from "@/lib/format";
 import { useIsMobile } from "@/lib/responsive";
+import { usePanelScroll } from "@/lib/usePanelScroll";
 import { Label } from "./Label";
 import { Rule } from "./Rule";
 
@@ -195,6 +205,16 @@ export function CustomAnnotationRows() {
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
+  // Measured (see usePanelScroll.ts's own header): this list stays exactly
+  // as tall as its fixed panel space through 3 pins, only crossing into
+  // real overflow around 6-7 — a realistic single-sitting pin count for
+  // trying a custom model, not an inflated one. Wired for the same reason
+  // ReviewList.tsx is: the identical growing-list container its own
+  // measured overflow (37 real, Supabase-backed annotations) already
+  // justifies, just scoped to a shorter typical count here. Callback
+  // refs, not plain useRef objects — see usePanelScroll.ts's own header.
+  const { wrapperRef: scrollWrapperRef, contentRef: scrollContentRef } = usePanelScroll();
+
   const numberById = useMemo(() => {
     const map = new Map<string, number>();
     customAnnotations.forEach((annotation, index) => map.set(annotation.id, index + 1));
@@ -249,31 +269,33 @@ export function CustomAnnotationRows() {
 
       <Rule />
 
-      <ul className="flex-1 overflow-y-auto">
-        {filtered.length === 0 ? (
-          <li className="px-6 py-5 font-mono text-2xs text-faint">No comments match this filter</li>
-        ) : (
-          filtered.map((annotation) => (
-            <CustomAnnotationRow
-              key={annotation.id}
-              annotation={annotation}
-              number={numberById.get(annotation.id) ?? 0}
-              elementName={
-                (annotation.meshName ? elementByMeshName.get(annotation.meshName)?.displayName : undefined) ??
-                "Unplaced"
-              }
-              isHovered={hoveredAnnotationId === annotation.id}
-              isFlashing={recentlyAddedAnnotationId === annotation.id}
-              onHoverStart={() => setHoveredAnnotation(annotation.id)}
-              onHoverEnd={() => {
-                if (useProjectStore.getState().hoveredAnnotationId === annotation.id) {
-                  clearHoveredAnnotation();
+      <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
+        <ul ref={scrollContentRef}>
+          {filtered.length === 0 ? (
+            <li className="px-6 py-5 font-mono text-2xs text-faint">No comments match this filter</li>
+          ) : (
+            filtered.map((annotation) => (
+              <CustomAnnotationRow
+                key={annotation.id}
+                annotation={annotation}
+                number={numberById.get(annotation.id) ?? 0}
+                elementName={
+                  (annotation.meshName ? elementByMeshName.get(annotation.meshName)?.displayName : undefined) ??
+                  "Unplaced"
                 }
-              }}
-            />
-          ))
-        )}
-      </ul>
+                isHovered={hoveredAnnotationId === annotation.id}
+                isFlashing={recentlyAddedAnnotationId === annotation.id}
+                onHoverStart={() => setHoveredAnnotation(annotation.id)}
+                onHoverEnd={() => {
+                  if (useProjectStore.getState().hoveredAnnotationId === annotation.id) {
+                    clearHoveredAnnotation();
+                  }
+                }}
+              />
+            ))
+          )}
+        </ul>
+      </div>
     </div>
   );
 }

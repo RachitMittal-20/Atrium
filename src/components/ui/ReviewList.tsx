@@ -61,6 +61,7 @@ import { DURATION, PIN_BREAKPOINT, annotationCameraTarget, easeCameraTo } from "
 import { relativeTime } from "@/lib/format";
 import { isTypingTarget } from "@/lib/keyboard";
 import { useIsMobile } from "@/lib/responsive";
+import { usePanelScroll } from "@/lib/usePanelScroll";
 import { Label } from "./Label";
 import { Rule } from "./Rule";
 import { ELEMENT_CATEGORIES, type Annotation, type ElementCategory } from "@/types/project";
@@ -191,6 +192,16 @@ export function AnnotationRows() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>("all");
 
+  // Measured with the project's own real Supabase-backed annotations
+  // (37 accumulated across this session's own testing, not inflated demo
+  // data): scrollHeight 3801px against a ~605px available list height —
+  // a review thread that grows over a project's whole life is exactly the
+  // kind of container this is built to eventually overflow. wrapperRef is
+  // the overflow-y-auto scroll container below, contentRef its one <ul>
+  // child — see usePanelScroll.ts's own header for why these are callback
+  // refs rather than plain useRef objects.
+  const { wrapperRef: scrollWrapperRef, contentRef: scrollContentRef } = usePanelScroll();
+
   // Numerals reflect each annotation's position in the *unfiltered* array
   // — the same order AnnotationMarker.tsx numbers its rings from — so a
   // row's numeral always matches its marker regardless of what's filtered.
@@ -271,33 +282,35 @@ export function AnnotationRows() {
 
       <Rule />
 
-      <ul className="flex-1 overflow-y-auto">
-        {filtered.length === 0 ? (
-          <li className="px-6 py-5 font-mono text-2xs text-faint">No comments match this filter</li>
-        ) : (
-          filtered.map((annotation) => (
-            <AnnotationRow
-              key={annotation.id}
-              annotation={annotation}
-              number={numberById.get(annotation.id) ?? 0}
-              elementName={
-                (annotation.elementId ? elementById.get(annotation.elementId)?.name : undefined) ?? "Unplaced"
-              }
-              isHovered={hoveredAnnotationId === annotation.id}
-              isFlashing={recentlyAddedAnnotationId === annotation.id}
-              onHoverStart={() => setHoveredAnnotation(annotation.id)}
-              onHoverEnd={() => {
-                // Guards against a stale pointerleave racing behind a
-                // newer hover — the same pattern used for element and
-                // marker hover elsewhere in the app.
-                if (useProjectStore.getState().hoveredAnnotationId === annotation.id) {
-                  clearHoveredAnnotation();
+      <div ref={scrollWrapperRef} className="flex-1 overflow-y-auto">
+        <ul ref={scrollContentRef}>
+          {filtered.length === 0 ? (
+            <li className="px-6 py-5 font-mono text-2xs text-faint">No comments match this filter</li>
+          ) : (
+            filtered.map((annotation) => (
+              <AnnotationRow
+                key={annotation.id}
+                annotation={annotation}
+                number={numberById.get(annotation.id) ?? 0}
+                elementName={
+                  (annotation.elementId ? elementById.get(annotation.elementId)?.name : undefined) ?? "Unplaced"
                 }
-              }}
-            />
-          ))
-        )}
-      </ul>
+                isHovered={hoveredAnnotationId === annotation.id}
+                isFlashing={recentlyAddedAnnotationId === annotation.id}
+                onHoverStart={() => setHoveredAnnotation(annotation.id)}
+                onHoverEnd={() => {
+                  // Guards against a stale pointerleave racing behind a
+                  // newer hover — the same pattern used for element and
+                  // marker hover elsewhere in the app.
+                  if (useProjectStore.getState().hoveredAnnotationId === annotation.id) {
+                    clearHoveredAnnotation();
+                  }
+                }}
+              />
+            ))
+          )}
+        </ul>
+      </div>
     </div>
   );
 }
