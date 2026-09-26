@@ -246,7 +246,10 @@ export function UploadedModel({ url }: UploadedModelProps) {
 
     const derivedElements: UploadedElement[] = found.map((mesh, index) => {
       const meshName = mesh.name && nameCounts.get(mesh.name) === 1 ? mesh.name : mesh.uuid;
-      const displayName = mesh.name || `Mesh ${index + 1}`;
+      // glTF loading turns spaces in names into underscores ("Living room" ->
+      // "Living_room"); show them as spaces again. Only the label — the
+      // registry key (meshName) keeps the loader's exact name.
+      const displayName = mesh.name.replace(/_/g, " ").trim() || `Mesh ${index + 1}`;
       // Stashed on the mesh itself (three.js's own idiomatic spot for
       // custom per-object metadata) rather than kept in a separate
       // Map<Object3D, string> — the pointer handlers below read this
