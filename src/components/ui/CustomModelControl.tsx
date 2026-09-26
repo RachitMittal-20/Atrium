@@ -34,6 +34,18 @@
  * the original top-left placement is kept there — a centered row would
  * collide with the top-right stack on a phone-width screen.
  *
+ * The position classes below are three *non-overlapping* width ranges
+ * (under 640px, 640–900px, 901px and up) rather than a base position
+ * with an override on top. That is deliberate, and it fixed a real bug
+ * in this file's first version of the move: Tailwind emits a px-based
+ * `min-[901px]:` rule *before* the rem-based `sm:` (40rem) rule in the
+ * generated stylesheet, so an `sm:left-10` sitting next to a
+ * `min-[901px]:left-1/2` silently won at every width from 640px up and
+ * the cluster never moved. Ranges that can't both match can't fight over
+ * source order. Tailwind also compiles `max-[N]` as strictly *less than*
+ * N, which is why the bounds are 640/901 rather than 639/900 — those
+ * leave no gap at an exact 640px or 900px viewport.
+ *
  * Three pieces of UI while a custom model is active, matching the
  * mono/brass toolbar-chip language CameraModeToggle.tsx/
  * VisibilityToolbar.tsx already use (border-rule, font-mono text-3xs
@@ -91,6 +103,13 @@ const EYE_HEIGHT_STEP_METERS = 0.05;
 const chipClassName =
   "border border-rule bg-surface px-3 py-1.5 font-mono text-3xs uppercase tracking-[0.18em] text-faint transition-colors hover:border-ruleHi hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass";
 
+// The cluster's position — see file header ("Placement") for why these
+// are three non-overlapping width ranges and not a base + override.
+const clusterPositionClassName =
+  "max-[640px]:left-6 max-[640px]:top-24 " +
+  "min-[640px]:max-[901px]:left-10 min-[640px]:max-[901px]:top-28 " +
+  "min-[901px]:left-1/2 min-[901px]:top-16 min-[901px]:-translate-x-1/2 min-[901px]:items-center";
+
 export function CustomModelControl() {
   const customModelUrl = useProjectStore((state) => state.customModelUrl);
   const customModelName = useProjectStore((state) => state.customModelName);
@@ -134,11 +153,7 @@ export function CustomModelControl() {
   };
 
   return (
-    // Placement — see file header. Default (<= 900px) is the original
-    // top-left column; above 900px it becomes a centered column at
-    // top-16, clear of the docked comments/element panels. min-[901px]
-    // matches PIN_BREAKPOINT's own "<= 900 is mobile" cutoff exactly.
-    <div className="absolute left-6 top-24 z-10 flex flex-col items-start gap-2 sm:left-10 sm:top-28 min-[901px]:left-1/2 min-[901px]:top-16 min-[901px]:-translate-x-1/2 min-[901px]:items-center">
+    <div className={`absolute z-10 flex flex-col items-start gap-2 ${clusterPositionClassName}`}>
       {/* The required "this is a local preview" note — see file header.
           Always visible while a custom model is active, never collapsed
           behind a toggle the way ControlsHelp's own panel is: this is a
