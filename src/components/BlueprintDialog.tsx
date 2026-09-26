@@ -5,7 +5,9 @@
  * (Invitation.tsx). Two ways to make a model, as tabs:
  *   1. From a blueprint — pick a floor-plan image; Atrium reads the walls
  *      and rooms and works out the scale itself (optionally you can state
- *      the building's real length to make it exact).
+ *      the building's real length to make it exact). It is two steps:
+ *      analyse, then review the detected rooms (rename them — the names
+ *      decide which furniture goes where) and build.
  *   2. Manual — type in the rooms (name, size, where it sits, which side
  *      has a door), plus wall height and thickness, with a live 2D
  *      preview of what you are describing.
@@ -16,7 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
-import { blueprintImageToModel, layoutFromManual, manualPlanToModel } from "@/lib/blueprintToModel";
+import { analyzeBlueprintImage, layoutFromManual, layoutToModel, manualPlanToModel } from "@/lib/blueprintToModel";
 import {
   BlueprintError,
   type ManualDoorSide,
@@ -126,6 +128,11 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
   const previewUrl = picked?.url ?? null;
   const [knownLength, setKnownLength] = useState("");
   const [imageWallHeight, setImageWallHeight] = useState("2.7");
+  // The analysed plan, once step one has run; null means "not analysed yet
+  // (or the inputs changed since)". Room names in it are editable.
+  const [layout, setLayout] = useState<PlanLayout | null>(null);
+  // Furniture on/off, shared by both tabs.
+  const [furniture, setFurniture] = useState(true);
 
   // Manual tab
   const [wallHeight, setWallHeight] = useState("2.7");
@@ -197,18 +204,62 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
     }
   };
 
-  const createFromImage = () => {
+  // Step one: read the plan. Stays in the dialog so rooms can be reviewed.
+  const analyze = async () => {
     if (!image) return;
-    const length = num(knownLength);
-    void run(() =>
-      blueprintImageToModel(image, {
-        buildingLength: length > 0 ? length : undefined,
-        wallHeight: num(imageWallHeight) || 2.7,
-      }),
-    );
+    setBusy(true);
+    setError(null);
+    try {
+      const length = num(knownLength);
+      setLayout(
+        await analyzeBlueprintImage(image, {
+          buildingLength: length > 0 ? length : undefined,
+          wallHeight: num(imageWallHeight) || 2.7,
+        }),
+      );
+    } catch (e) {
+      console.error("[blueprint] analysis failed", e);
+      setError(
+        e instanceof BlueprintError
+          ? e.message
+          : "Something went wrong reading that image. Try a different one.",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const createManual = () => void run(() => manualPlanToModel(spec));
+  // Step two: build the model from the reviewed layout.
+  const createFromImage = () => {
+    if (!layout || !image) return;
+    void run(() => layoutToModel(layout, image.name, furniture));
+  };
+
+  const renameRoom = (index: number, name: string) =>
+    setLayout((current) =>
+      current ? { ...current, rooms: current.rooms.map((r, i) => (i === index ? { ...r, name } : r)) } : current,
+    );
+
+  const createManual = () => void run(() => manualPlanToModel(spec, furniture));
+
+  // Any input change invalidates the analysis, so the review never shows a
+  // stale reading of a different image or scale.
+  const changed = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    setLayout(null);
+  };
+
+  const furnitureToggle = (
+    <label className="flex cursor-pointer items-center gap-2 font-mono text-3xs uppercase tracking-[0.18em] text-muted">
+      <input
+        type="checkbox"
+        checked={furniture}
+        onChange={(e) => setFurniture(e.target.checked)}
+        className="h-3.5 w-3.5 accent-brass"
+      />
+      Add furniture (beds, sofas, kitchen, bathroom…)
+    </label>
+  );
 
   const tabClass = (active: boolean) =>
     `px-4 py-2 font-mono text-3xs uppercase tracking-[0.18em] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brass ${
@@ -283,6 +334,7 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     setPicked(file ? { file, url: URL.createObjectURL(file) } : null);
+                    setLayout(null);
                     setError(null);
                     e.target.value = "";
                   }}
@@ -295,16 +347,45 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
                     inputMode="decimal"
                     placeholder="Auto-detect"
                     value={knownLength}
-                    onChange={(e) => setKnownLength(e.target.value)}
+                    onChange={(e) => changed(setKnownLength)(e.target.value)}
                   />
                 </Field>
                 <Field label="Wall height, metres">
-                  <input className={inputClass} inputMode="decimal" value={imageWallHeight} onChange={(e) => setImageWallHeight(e.target.value)} />
+                  <input className={inputClass} inputMode="decimal" value={imageWallHeight} onChange={(e) => changed(setImageWallHeight)(e.target.value)} />
                 </Field>
               </div>
               <p className="font-mono text-3xs text-faint">
                 Leave the length empty and Atrium estimates the scale from the wall thickness — enter the real length of the longest side for exact sizes.
               </p>
+              {layout ? (
+                <div className="grid gap-5 border-t border-rule pt-5 md:grid-cols-[1fr_260px]">
+                  <div className="flex flex-col gap-3">
+                    <span className={labelClass}>Rooms found — rename them</span>
+                    <p className="font-mono text-3xs text-faint">
+                      Atrium found {layout.rooms.length} room{layout.rooms.length === 1 ? "" : "s"} and guessed what each is. The name decides the furniture: use words like
+                      bedroom, living room, kitchen, bathroom, dining or study (anything else stays empty).
+                    </p>
+                    {layout.rooms.map((room, i) => (
+                      <div key={i} className="flex items-center gap-3">
+                        <span className="h-4 w-4 shrink-0 border border-rule" style={{ background: room.color }} aria-hidden="true" />
+                        <input
+                          aria-label={`Name of room ${i + 1}`}
+                          className={`${inputClass} flex-1`}
+                          value={room.name}
+                          onChange={(e) => renameRoom(i, e.target.value)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <span className={labelClass}>Detected plan (top view)</span>
+                    <div className="aspect-square border border-rule bg-ground p-2">
+                      <PlanPreview layout={layout} />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {furnitureToggle}
             </div>
           ) : (
             <div className="grid gap-6 md:grid-cols-[1fr_260px]">
@@ -398,8 +479,9 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
                   {previewLayout ? <PlanPreview layout={previewLayout} /> : <p className="p-2 font-mono text-3xs text-clay">{problem}</p>}
                 </div>
                 <p className="font-mono text-3xs text-faint">
-                  Walls are drawn along every room edge; shared edges become one wall. North is up.
+                  Walls are drawn along every room edge; shared edges become one wall. North is up. Furniture is picked from the room name.
                 </p>
+                {furnitureToggle}
               </div>
             </div>
           )}
@@ -416,9 +498,15 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
               Cancel
             </Button>
             {tab === "image" ? (
-              <Button type="button" onClick={createFromImage} disabled={busy || !image}>
-                {busy ? "Building…" : "Create 3D model"}
-              </Button>
+              layout ? (
+                <Button type="button" onClick={createFromImage} disabled={busy}>
+                  {busy ? "Building…" : "Create 3D model"}
+                </Button>
+              ) : (
+                <Button type="button" onClick={() => void analyze()} disabled={busy || !image}>
+                  {busy ? "Reading plan…" : "Analyze plan"}
+                </Button>
+              )
             ) : (
               <Button type="button" onClick={createManual} disabled={busy || !previewLayout}>
                 {busy ? "Building…" : "Create 3D model"}

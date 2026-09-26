@@ -30,8 +30,8 @@ export interface BlueprintOptions {
   wallHeight: number;
 }
 
-async function exportGlb(layout: PlanLayout, fileName: string): Promise<File> {
-  const scene = buildPlanScene(layout);
+async function exportGlb(layout: PlanLayout, fileName: string, furniture: boolean): Promise<File> {
+  const scene = buildPlanScene(layout, { furniture });
   const buffer = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: false });
   if (!(buffer instanceof ArrayBuffer)) throw new Error("GLTFExporter did not return binary data");
   return new File([buffer], fileName, { type: "model/gltf-binary" });
@@ -81,15 +81,21 @@ async function readPixels(file: File): Promise<PlanPixels> {
   return { width, height, rgba: ctx.getImageData(0, 0, width, height).data };
 }
 
-export async function blueprintImageToModel(image: File, options: BlueprintOptions): Promise<File> {
-  const pixels = await readPixels(image);
-  const layout = layoutFromPixels(pixels, options);
-  const base = image.name.replace(/\.[^.]+$/, "") || "blueprint";
-  return exportGlb(layout, `${base}-3d.glb`);
+/** Stage one of the image path: read the plan into an editable layout
+ *  (walls + rooms with guessed names) so the person can check and rename
+ *  the rooms before any 3D is built. */
+export async function analyzeBlueprintImage(image: File, options: BlueprintOptions): Promise<PlanLayout> {
+  return layoutFromPixels(await readPixels(image), options);
 }
 
-export async function manualPlanToModel(spec: ManualPlanSpec, name = "manual-plan"): Promise<File> {
-  return exportGlb(layoutFromManual(spec), `${name}-3d.glb`);
+/** Stage two: build and export the model from a (possibly renamed) layout. */
+export async function layoutToModel(layout: PlanLayout, name: string, furniture: boolean): Promise<File> {
+  const base = name.replace(/\.[^.]+$/, "") || "blueprint";
+  return exportGlb(layout, `${base}-3d.glb`, furniture);
+}
+
+export async function manualPlanToModel(spec: ManualPlanSpec, furniture: boolean): Promise<File> {
+  return exportGlb(layoutFromManual(spec), "manual-plan-3d.glb", furniture);
 }
 
 /** Exposed for the dialog's live 2D preview. */
