@@ -1053,13 +1053,23 @@ export const useProjectStore = create<ProjectState>((set, get) => {
 
     mode: "review",
     pendingPin: null,
-    enterPinMode: () => set({ mode: "pin", selectedElementId: null, pendingPin: null }),
-    exitPinMode: () => set({ mode: "review", pendingPin: null }),
+    // pendingCustomPin is cleared alongside pendingPin in all three of
+    // these — mode itself is shared between the curated and custom-model
+    // paths (see ProjectState's own comment on why), but which of the two
+    // pending-pin fields a given session actually used depends on which
+    // model was mounted. Clearing only pendingPin here was a real bug,
+    // not a hypothetical: it left UploadedAnnotationComposer.tsx open
+    // indefinitely after a successful submit, since pinCustomAnnotation's
+    // own caller calls exitPinMode() expecting it to close the composer
+    // the same way pinAnnotation's caller does — found by actually
+    // placing a pin against a custom model, not caught by typechecking.
+    enterPinMode: () => set({ mode: "pin", selectedElementId: null, pendingPin: null, pendingCustomPin: null }),
+    exitPinMode: () => set({ mode: "review", pendingPin: null, pendingCustomPin: null }),
     togglePinMode: () =>
       set((state) =>
         state.mode === "pin"
-          ? { mode: "review", pendingPin: null }
-          : { mode: "pin", selectedElementId: null, pendingPin: null },
+          ? { mode: "review", pendingPin: null, pendingCustomPin: null }
+          : { mode: "pin", selectedElementId: null, pendingPin: null, pendingCustomPin: null },
       ),
     setPendingPin: (pin) => set({ pendingPin: pin }),
     clearPendingPin: () => set({ pendingPin: null }),
