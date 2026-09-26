@@ -99,6 +99,31 @@
  * exported: PanoramaControls.tsx (the fixed-point look-around mode)
  * imports these exact values rather than restating them, so drag-to-look
  * and Q/E feel identical in both modes and a retune here reaches both.
+ *
+ * Movement easing (P28): WASD used to set position directly from
+ * `radius * MOVE_SPEED_RATIO * delta` every frame a key was held — full
+ * speed the instant a key went down, and the per-frame loop returned
+ * early the instant keys.size hit zero, so movement stopped dead on
+ * keyup with no carry-over at all. That's the same abrupt, undamped
+ * pattern this pass's own brief flagged in OrbitControls' rotation before
+ * P27 fixed it (see Scene.tsx's dampingFactor comment) — just for
+ * translation instead of rotation, and confirmed the same way: it wasn't
+ * assumed from reading the code, it was checked, and this one really did
+ * snap. moveVelocityRef now holds a world-space (x, z) units/sec value
+ * that's exponentially smoothed toward a target velocity every frame
+ * (`1 - exp(-delta / MOVE_ACCEL_TIME_CONSTANT)`, the same frame-rate-
+ * independent lerp shape Lenis itself uses for scroll — see
+ * SmoothScrollProvider.tsx) rather than jumping straight to it, so
+ * releasing a key now coasts to a stop over MOVE_ACCEL_TIME_CONSTANT-ish
+ * seconds instead of halting instantly. The per-frame loop no longer
+ * returns early just because keys.size is zero — it keeps running (and
+ * re-resolving position/floor) for as long as velocity is still above
+ * VELOCITY_EPSILON, which is what lets deceleration actually finish
+ * playing out after the key is already up. Q/E rotation and the Up/Down
+ * eye-offset nudge are untouched — both already apply at a constant rate
+ * while held and simply stop accumulating on release with no snap of
+ * their own to begin with, unlike position, which used to teleport to a
+ * fixed speed in one frame.
  */
 "use client";
 
@@ -134,6 +159,14 @@ const FLOOR_MARGIN_METERS = 0.2;
 // fixed number — so crossing the apartment takes a similar number of
 // seconds regardless of how large its native units turn out to be.
 const MOVE_SPEED_RATIO = 0.35;
+
+// How quickly actual velocity chases the held-key target velocity — see
+// file header's "Movement easing" paragraph. Tuned by feel against a
+// real WASD hold/release (not derived from anything): fast enough that
+// starting to walk still reads as immediate, slow enough that releasing
+// a key visibly coasts for a beat instead of stopping dead. Lower is
+// snappier/closer to the old instant behaviour; higher is floatier.
+const MOVE_ACCEL_TIME_CONSTANT = 0.15;
 
 // Radians of look rotation per pixel of mouse drag — tuned by feel, not
 // derived from anything.
@@ -239,6 +272,12 @@ export function WalkthroughControls({
   const yawRef = useRef(0);
   const pitchRef = useRef(0);
   const eyeOffsetRef = useRef(0);
+  // World-space (x, z) units/sec — see file header's "Movement easing"
+  // paragraph. A plain mutable object rather than two refs: both
+  // components are always read/written together every frame, and this
+  // mirrors AnnotationMarker.tsx's own arrivalMultiplier pattern for a
+  // per-frame value that isn't React state.
+  const moveVelocityRef = useRef({ x: 0, z: 0 });
   const draggingRef = useRef(false);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
   const raycasterRef = useRef(new THREE.Raycaster());
@@ -298,6 +337,8 @@ export function WalkthroughControls({
     yawRef.current = euler.y;
     pitchRef.current = euler.x;
     eyeOffsetRef.current = 0;
+    moveVelocityRef.current.x = 0;
+    moveVelocityRef.current.z = 0;
 
     floorObjectRef.current = useProjectStore.getState().getElementObject("floor");
 
@@ -436,9 +477,20 @@ export function WalkthroughControls({
   // which the compiler-oriented lint rule can't tell apart from mutating
   // React-managed state.
   /* eslint-disable react-hooks/immutability */
+  // radius*MOVE_SPEED_RATIO is a speed (units/sec) now, not pre-multiplied
+  // by delta the way the old single-shot moveDistance was — velocity
+  // itself is what gets smoothed per frame below, and only converted to
+  // an actual displacement (velocity * delta) once it has been.
+  const moveSpeed = radius * MOVE_SPEED_RATIO;
+  // Below this, snap velocity to exactly zero rather than let it decay
+  // asymptotically forever — small enough to be visually identical to
+  // "actually stopped," and what lets the per-frame loop below stop
+  // re-invalidating once a key-release has genuinely coasted to a halt.
+  const velocityEpsilon = moveSpeed * 0.002;
+
   useFrame((_state, delta) => {
     const keys = keysRef.current;
-    if (keys.size === 0) return;
+    const velocity = moveVelocityRef.current;
 
     let rotate = 0;
     let vertical = 0;
@@ -454,7 +506,14 @@ export function WalkthroughControls({
       if (RIGHT_KEYS.has(key)) strafe += 1;
       if (LEFT_KEYS.has(key)) strafe -= 1;
     }
-    if (rotate === 0 && vertical === 0 && forward === 0 && strafe === 0) return;
+
+    // Still coasting from a just-released key even though no key is held
+    // this frame — see file header's "Movement easing" paragraph for why
+    // this can no longer just return on keys.size === 0 the way it used
+    // to: that early return is exactly what used to make release feel
+    // instant.
+    const stillCoasting = Math.abs(velocity.x) > velocityEpsilon || Math.abs(velocity.z) > velocityEpsilon;
+    if (rotate === 0 && vertical === 0 && forward === 0 && strafe === 0 && !stillCoasting) return;
 
     // Q/E free-rotate — shares yawRef with mouse-look (handlePointerMove
     // above), so switching between the two mid-turn never snaps.
@@ -483,28 +542,41 @@ export function WalkthroughControls({
     const rightX = Math.cos(yaw);
     const rightZ = -Math.sin(yaw);
 
-    const moveDistance = radius * MOVE_SPEED_RATIO * delta;
-    let moveX = (forwardX * forward + rightX * strafe) * moveDistance;
-    let moveZ = (forwardZ * forward + rightZ * strafe) * moveDistance;
-    // Normalises diagonal movement (both a forward and a strafe key held)
-    // back down to the same speed as a single key alone.
-    const length = Math.hypot(moveX, moveZ);
-    if (length > moveDistance && length > 0) {
-      const scale = moveDistance / length;
-      moveX *= scale;
-      moveZ *= scale;
+    // The *target* velocity this frame's held keys imply — full moveSpeed
+    // in the intended direction, zero if nothing's held (which is exactly
+    // what lets a released key's velocity decay toward zero below instead
+    // of holding steady).
+    let targetVelocityX = forwardX * forward + rightX * strafe;
+    let targetVelocityZ = forwardZ * forward + rightZ * strafe;
+    // Normalises diagonal input (both a forward and a strafe key held)
+    // back down to the same speed as a single key alone, same as before.
+    const targetLength = Math.hypot(targetVelocityX, targetVelocityZ);
+    if (targetLength > 1) {
+      targetVelocityX /= targetLength;
+      targetVelocityZ /= targetLength;
     }
+    targetVelocityX *= moveSpeed;
+    targetVelocityZ *= moveSpeed;
 
-    const nextX = THREE.MathUtils.clamp(camera.position.x + moveX, minX, maxX);
-    const nextZ = THREE.MathUtils.clamp(camera.position.z + moveZ, minZ, maxZ);
+    // Exponentially smooths actual velocity toward that target — see file
+    // header for why this specific shape (frame-rate-independent, the
+    // same one Lenis itself uses for scroll).
+    const accelT = 1 - Math.exp(-delta / MOVE_ACCEL_TIME_CONSTANT);
+    velocity.x += (targetVelocityX - velocity.x) * accelT;
+    velocity.z += (targetVelocityZ - velocity.z) * accelT;
+    if (Math.abs(velocity.x) < velocityEpsilon) velocity.x = 0;
+    if (Math.abs(velocity.z) < velocityEpsilon) velocity.z = 0;
+
+    const nextX = THREE.MathUtils.clamp(camera.position.x + velocity.x * delta, minX, maxX);
+    const nextZ = THREE.MathUtils.clamp(camera.position.z + velocity.z * delta, minZ, maxZ);
     camera.position.x = nextX;
     camera.position.z = nextZ;
 
-    // Y is always re-resolved from the *current* x/z on any input this
-    // frame handled — a rotate-only or vertical-only frame still needs
-    // this (a rotate-only frame technically doesn't, since x/z didn't
-    // move, but re-running the raycast is cheap and keeping one code path
-    // for all four inputs is simpler than special-casing it away).
+    // Y is always re-resolved from the *current* x/z regardless of which
+    // input(s) fired this frame — a rotate-only frame technically doesn't
+    // need this (x/z didn't move), but re-running the raycast is cheap
+    // and keeping one code path for every input is simpler than special-
+    // casing it away.
     const floorAtPosition = resolveFloorY(nextX, nextZ);
     camera.position.y = clampEyeY(floorAtPosition + eyeHeightUnits + eyeOffsetRef.current, floorAtPosition);
 
