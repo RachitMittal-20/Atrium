@@ -23,7 +23,7 @@
  * thematically with the "what project am I looking at" text already
  * there ("what *model* am I looking at" sitting right below it).
  *
- * Two pieces of UI while a custom model is active, matching the
+ * Three pieces of UI while a custom model is active, matching the
  * mono/brass toolbar-chip language CameraModeToggle.tsx/
  * VisibilityToolbar.tsx already use (border-rule, font-mono text-3xs
  * uppercase tracking, brass for the active/notable state) rather than the
@@ -35,7 +35,21 @@
  *     that says so plainly), showing the uploaded file's own name, plus
  *     a "Back to Meridian House" button that calls clearCustomModel.
  *
- *  2. Only while a custom model is active *and* cameraMode is
+ *  2. A "Download edited .glb" button — how a reviewer keeps their work,
+ *     since the session itself is gone on refresh. It looks up the live
+ *     scene UploadedModel.tsx registered under CUSTOM_MODEL_ROOT_KEY,
+ *     reads the current element list and hidden set straight from the
+ *     store at click time (getState, not a subscription — nothing here
+ *     needs to re-render as edits happen, only to read them once when
+ *     pressed), and hands all three to downloadEditedModel in
+ *     src/lib/exportCustomModel.ts, which owns everything about what goes
+ *     into the file. Re-uploading that file on the landing screen shows
+ *     the same edits — see UploadedModel.tsx's header, "Round trip," for
+ *     the load-side half. A failed export shows a short inline message
+ *     rather than throwing: the reviewer's session is still intact, and
+ *     they can simply try again.
+ *
+ *  3. Only while a custom model is active *and* cameraMode is
  *     "walkthrough": a manual eye-height slider (customEyeHeightMeters),
  *     because an uploaded model has no door mesh to calibrate real-world
  *     scale off of the way the curated apartment does — see Scene.tsx's
@@ -50,8 +64,9 @@
  */
 "use client";
 
-import { useId } from "react";
+import { useId, useState } from "react";
 import { useProjectStore } from "@/store/projectStore";
+import { CUSTOM_MODEL_ROOT_KEY, downloadEditedModel } from "@/lib/exportCustomModel";
 
 // The same 1.65m default WalkthroughControls.tsx's own fixed
 // EYE_HEIGHT_METERS constant uses — restated here as the slider's
@@ -73,10 +88,38 @@ export function CustomModelControl() {
   const setCustomEyeHeightMeters = useProjectStore((state) => state.setCustomEyeHeightMeters);
   const sliderId = useId();
 
+  // Download button state — see file header, item 2. `isExporting` stops a
+  // double-click from starting two exports of a large model at once;
+  // `exportFailed` drives the inline retry message.
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportFailed, setExportFailed] = useState(false);
+
   // See file header — no custom model active means there is nothing left
   // for this component to render; the trigger that used to fill this
   // spot lives on the landing screen now.
   if (!customModelUrl) return null;
+
+  const handleDownload = async () => {
+    const state = useProjectStore.getState();
+    const root = state.getElementObject(CUSTOM_MODEL_ROOT_KEY);
+    // No root means UploadedModel hasn't finished loading (or unmounted)
+    // — nothing to export yet, same "try again" outcome as a real failure.
+    if (!root) {
+      setExportFailed(true);
+      return;
+    }
+
+    setIsExporting(true);
+    setExportFailed(false);
+    try {
+      await downloadEditedModel(root, state.uploadedElements, state.hiddenElementIds, customModelName ?? "model.glb");
+    } catch (error) {
+      console.error("[CustomModelControl] export failed:", error);
+      setExportFailed(true);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <div className="absolute left-6 top-24 z-10 flex flex-col items-start gap-2 sm:left-10 sm:top-28">
@@ -90,12 +133,26 @@ export function CustomModelControl() {
         <p className="mt-1 truncate font-mono text-3xs text-faint" title={customModelName ?? undefined}>
           {customModelName}
         </p>
-        <p className="mt-1 text-3xs text-faint">No spec sheet, comments, or saving — gone on refresh.</p>
+        <p className="mt-1 text-3xs text-faint">
+          Comments are gone on refresh. Colors, names, categories and hidden parts can be downloaded as a .glb.
+        </p>
       </div>
 
       <button type="button" onClick={() => clearCustomModel()} className={chipClassName}>
         Back to Meridian House
       </button>
+
+      {/* Download the edited model — see file header, item 2. Disabled
+          (not hidden) while an export runs so the button visibly
+          acknowledges the press on a large model. */}
+      <button type="button" onClick={handleDownload} disabled={isExporting} className={`${chipClassName} disabled:opacity-60`}>
+        {isExporting ? "Preparing…" : "Download edited .glb"}
+      </button>
+      {exportFailed && (
+        <p role="alert" className="max-w-56 font-mono text-3xs text-faint">
+          Couldn&apos;t export the model — try again.
+        </p>
+      )}
 
       {/* Only while walkthrough is actually showing this model — see
           file header on why this is the one manually-tunable value. */}

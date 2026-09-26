@@ -95,6 +95,23 @@
  * be the last time the effect ran, so removing an override (Reset to
  * original) always lands back on the model's real starting color.
  *
+ * Round trip with a previously downloaded model
+ * (src/lib/exportCustomModel.ts): CustomModelControl.tsx's Download
+ * button writes a reviewer's edits into a new .glb, and this file is the
+ * half that reads such a file back. Recolors and renames need nothing
+ * special here — a recolor is just the material's own color, and a rename
+ * is just mesh.name, which the traversal below already turns into the
+ * display name. Category and hidden state are the two edits glTF has no
+ * native field for, so the exporter stores them in node `extras`, which
+ * GLTFLoader surfaces as mesh.userData: the traversal reads the category
+ * straight into each UploadedElement, and the registration effect re-
+ * hides any mesh flagged hidden. That hide is idempotent (skips a mesh
+ * already hidden) because React's dev-mode double-invoked effects would
+ * otherwise toggle it right back to visible. This component also
+ * registers its own root scene (CUSTOM_MODEL_ROOT_KEY) so the Download
+ * button — outside the Canvas, with no ref to this component — can find
+ * the scene to export.
+ *
  * Pin mode now has a real branch, mirroring BuildingModel.tsx's own
  * handleClick: raycasts the click into a world point + surface normal
  * and hands them to projectStore as pendingCustomPin, which
@@ -119,7 +136,9 @@ import { EffectComposer, Outline } from "@react-three/postprocessing";
 import { useThree, type ThreeEvent } from "@react-three/fiber";
 import gsap from "gsap";
 import { DURATION, EASE_WEIGHTED } from "@/lib/motion";
+import { ATRIUM_CATEGORY_KEY, ATRIUM_HIDDEN_KEY, CUSTOM_MODEL_ROOT_KEY } from "@/lib/exportCustomModel";
 import { useProjectStore, type UploadedElement } from "@/store/projectStore";
+import { ELEMENT_CATEGORIES, type ElementCategory } from "@/types/project";
 import { UploadedAnnotationMarker } from "./UploadedAnnotationMarker";
 import { UploadedAnnotationComposer } from "./UploadedAnnotationComposer";
 
@@ -151,6 +170,15 @@ function forEachMaterial(material: THREE.Material | THREE.Material[], fn: (mater
   } else {
     fn(material);
   }
+}
+
+// Reads the category a previous export stored in a node's extras (see
+// file header, "Round trip"). Validated against ELEMENT_CATEGORIES rather
+// than trusted: userData is whatever a file's author put there, so an
+// unknown or malformed value must come back as "no category," not a
+// string the rest of the app would treat as a real ElementCategory.
+function parseCategory(value: unknown): ElementCategory | null {
+  return ELEMENT_CATEGORIES.find((category) => category === value) ?? null;
 }
 
 function tweenEmissive(mesh: THREE.Mesh, intensity: number, invalidate: () => void) {
@@ -256,7 +284,10 @@ export function UploadedModel({ url }: UploadedModelProps) {
         colors[meshName] = firstColorMaterial.color.clone();
       }
 
-      return { meshName, displayName, category: null };
+      // A category is only ever present here if this file is a previous
+      // Download from this app (see file header, "Round trip") — an
+      // ordinary upload has none, and parseCategory returns null for it.
+      return { meshName, displayName, category: parseCategory(mesh.userData[ATRIUM_CATEGORY_KEY]) };
     });
 
     return { meshes: found, elements: derivedElements, baseColors: colors };
@@ -274,19 +305,32 @@ export function UploadedModel({ url }: UploadedModelProps) {
   // rename/category edit — see renameUploadedElement's own comment in
   // projectStore.ts for why that's a targeted update, not a call back
   // into setUploadedElements from the panel itself.
+  //
+  // Also registers the root scene under CUSTOM_MODEL_ROOT_KEY (what
+  // CustomModelControl.tsx's Download button exports from), and re-hides
+  // any mesh a previous export flagged hidden — see file header, "Round
+  // trip", for why that check-before-toggle is required, not optional.
   useEffect(() => {
     const state = useProjectStore.getState();
+    state.registerElementObject(CUSTOM_MODEL_ROOT_KEY, clonedScene);
     for (const mesh of meshes) {
       state.registerElementObject(mesh.userData.meshName as string, mesh);
     }
     setUploadedElements(elements);
+    for (const mesh of meshes) {
+      const meshName = mesh.userData.meshName as string;
+      if (mesh.userData[ATRIUM_HIDDEN_KEY] === true && !useProjectStore.getState().hiddenElementIds.has(meshName)) {
+        useProjectStore.getState().toggleElementVisibility(meshName);
+      }
+    }
     invalidate();
     return () => {
+      state.registerElementObject(CUSTOM_MODEL_ROOT_KEY, null);
       for (const mesh of meshes) {
         state.registerElementObject(mesh.userData.meshName as string, null);
       }
     };
-  }, [meshes, elements, setUploadedElements, invalidate]);
+  }, [clonedScene, meshes, elements, setUploadedElements, invalidate]);
 
   useEffect(() => {
     return () => {
