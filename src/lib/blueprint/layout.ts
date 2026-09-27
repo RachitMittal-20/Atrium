@@ -18,14 +18,41 @@ import {
   type RoomMap,
   type WallMask,
 } from "@/types/blueprint";
-import { guessRoomNames } from "./furniture";
+import { guessRoomNames, roomKindFromName } from "./furniture";
 
-/** Warm, muted floor colours handed out to rooms in order. */
-export const ROOM_COLORS = [
-  "#d9c2a0", "#c9d3b5", "#b9cbd6", "#e0c1b3", "#d3c4de", "#e6d9a8",
-  "#bfd8cf", "#dcb9a0", "#c6c6b0", "#d8b8c4",
-];
-export const roomColor = (index: number): string => ROOM_COLORS[index % ROOM_COLORS.length];
+/** Floor colours grounded in the room's own purpose rather than handed
+ *  out by array position — a bedroom reads as a bedroom (warm wood), a
+ *  bathroom or kitchen as tiled (cool, pale), a hallway as plain stone —
+ *  so two rooms that end up side by side (including the two halves of an
+ *  OCR label split, which share no real wall between them, so nothing
+ *  else marks them as different rooms) don't get arbitrarily similar or
+ *  clashing colours purely because of detection order. A second room of
+ *  the same kind gets the palette's next shade rather than a repeat, so
+ *  multiple bedrooms are still easy to tell apart at a glance. */
+const KIND_FLOORS: Record<string, string[]> = {
+  living: ["#d8b285", "#cf9f6c"],
+  dining: ["#d9ad86", "#c99a72"],
+  bedroom: ["#e2c9a4", "#dcbb92", "#e6d2ad", "#d8bd95"],
+  kitchen: ["#d7d2c6", "#cec7b8"],
+  bathroom: ["#bcd6dc", "#a9c9cf"],
+  study: ["#c9b28d"],
+  hallway: ["#cac4b6"],
+  other: ["#cdc7ba", "#c3bdae"],
+};
+
+function floorKind(name: string): string {
+  return /hall|corridor/i.test(name) ? "hallway" : roomKindFromName(name);
+}
+
+/** Picks the next shade for `name`'s kind, remembering (in `seen`) how
+ *  many rooms of that kind this layout has already coloured. */
+function floorColorFor(name: string, seen: Map<string, number>): string {
+  const kind = floorKind(name);
+  const palette = KIND_FLOORS[kind] ?? KIND_FLOORS.other;
+  const i = seen.get(kind) ?? 0;
+  seen.set(kind, i + 1);
+  return palette[i % palette.length];
+}
 
 /**
  * Decomposes a set of pixels into rectangles by merging horizontal runs
@@ -112,7 +139,7 @@ export function layoutFromImage(
 
   const wallRects = maskToRects(width, height, (i) => mask[i] === 1, tol).map(toMetres);
 
-  const withIds: (PlanRoom & { id: number })[] = roomMap.rooms.map((room, idx) => {
+  const withIds: (PlanRoom & { id: number })[] = roomMap.rooms.map((room) => {
     const [bx0, by0, bx1, by1] = room.bbox;
     const rects = maskToRects(
       width,
@@ -121,14 +148,20 @@ export function layoutFromImage(
       Math.max(2, tol * 2),
       { x0: Math.max(bx0, fx0), y0: Math.max(by0, fy0), x1: Math.min(bx1, fx1), y1: Math.min(by1, fy1) },
     ).map(toMetres);
-    return { id: room.id, name: `Room ${room.id}`, color: roomColor(idx), rects };
+    return { id: room.id, name: `Room ${room.id}`, color: "", rects };
   });
 
   const kept = withIds.filter((r) => r.rects.length > 0);
   // Rooms OCR read a label for keep it; everything else falls back to a
   // size-based guess (the dialog also lets the person rename any room).
+  // Colour follows the final name, once it's known, so it reflects the
+  // room's real purpose rather than the order it happened to be detected in.
   const guesses = guessRoomNames(kept);
-  kept.forEach((room, i) => { room.name = ocrNames?.get(room.id) ?? guesses[i]; });
+  const colorsSeen = new Map<string, number>();
+  kept.forEach((room, i) => {
+    room.name = ocrNames?.get(room.id) ?? guesses[i];
+    room.color = floorColorFor(room.name, colorsSeen);
+  });
   const rooms: PlanRoom[] = kept.map((room) => ({ name: room.name, color: room.color, rects: room.rects }));
   return { wallHeight, walls: wallRects, rooms };
 }
@@ -256,11 +289,11 @@ export function layoutFromManual(spec: ManualPlanSpec): PlanLayout {
   const oz = (minZ + maxZ) / 2;
   const shift = (r: MetreRect): MetreRect => ({ x0: r.x0 - ox, z0: r.z0 - oz, x1: r.x1 - ox, z1: r.z1 - oz });
 
-  const rooms: PlanRoom[] = placed.map((r, i) => ({
-    name: spec.rooms[i].name.trim() || `Room ${i + 1}`,
-    color: roomColor(i),
-    rects: [shift(r)],
-  }));
+  const colorsSeen = new Map<string, number>();
+  const rooms: PlanRoom[] = placed.map((r, i) => {
+    const name = spec.rooms[i].name.trim() || `Room ${i + 1}`;
+    return { name, color: floorColorFor(name, colorsSeen), rects: [shift(r)] };
+  });
   const shiftedDoors: PlanDoor[] = doors.map((d) => ({ ...d, hingeX: d.hingeX - ox, hingeZ: d.hingeZ - oz }));
   return { wallHeight: spec.wallHeight, wallThickness: t, walls: walls.map(shift), rooms, doors: shiftedDoors };
 }
