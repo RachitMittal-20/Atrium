@@ -155,10 +155,12 @@ function chair(): Piece {
 
 function counter(w: number, d: number): Piece {
   const p: Piece = [box(w, d, 0, 0.85, "#dcd6cb"), box(w, d + 0.02, 0.85, 0.9, "#4d4f52", 0, 0.01)];
-  // hob (four rings) and sink basin, so the run reads as a kitchen
-  const hobX = -w / 2 + Math.min(0.6, w * 0.3);
+  // Hob near one end, sink near the other, so even a short run reads as a
+  // real kitchen counter rather than a bare slab.
+  const hobX = -w / 2 + Math.min(0.6, w * 0.28);
   for (const dx of [-0.13, 0.13]) for (const dz of [-0.13, 0.13]) p.push(box(0.16, 0.16, 0.9, 0.92, DARK, hobX + dx, dz));
-  if (w > 1.6) p.push(box(0.5, 0.4, 0.88, 0.9, "#b8bcc0", w / 2 - 0.45, 0));
+  const sinkW = Math.min(0.5, w * 0.3);
+  p.push(box(sinkW, 0.4, 0.88, 0.9, "#b8bcc0", w / 2 - sinkW / 2 - 0.1, 0));
   return p;
 }
 
@@ -421,11 +423,20 @@ function furnishLiving(p: RoomPlacer) {
   }
   // TV unit on the opposite wall, facing the sofa.
   const opp = OPPOSITE[spot.side];
-  if (room >= 3.6) p.againstWall("TV unit", "Furniture", tvUnit(1.4, 0.4), 1.4, 0.4, [opp], ["center"]);
+  if (room >= 2.6) p.againstWall("TV unit", "Furniture", tvUnit(1.4, 0.4), 1.4, 0.4, [opp], ["center"]);
   // A pair of armchairs beside the coffee table when the room is generous.
   if (p.w * p.d >= 20) {
     const remaining = p.sidesByCover().filter((s) => s !== spot.side && s !== opp);
     p.againstWall("Armchair", "Furniture", armchair(0.85, 0.85), 0.85, 0.85, remaining, ["center"], 0.5);
+  }
+  // A side table tucked at one end of the sofa, if there's room for it.
+  const along = horizontal ? p.r.x0 : p.r.z0;
+  const wallLen = p.wallLength(spot.side);
+  const end = mid + (sw / 2 + 0.25);
+  if (end + 0.25 <= along + wallLen && p.cover(spot.side, end - 0.25, end + 0.25) >= MIN_WALL_COVER) {
+    const cx = horizontal ? end : spot.side === "W" ? p.r.x0 + 0.25 : p.r.x1 - 0.25;
+    const cz = horizontal ? (spot.side === "N" ? p.r.z0 + 0.25 : p.r.z1 - 0.25) : end;
+    p.placeAt("Side table", "Furniture", nightstand(0.4, 0.4), 0.4, 0.4, rot, cx, cz);
   }
 }
 

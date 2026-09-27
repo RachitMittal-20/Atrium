@@ -118,6 +118,24 @@ export interface PlanLayout {
   /** Solid wall pieces, standing from the floor up to wallHeight. */
   walls: MetreRect[];
   rooms: PlanRoom[];
+  /** Visible door leaves, shown standing open in the opening. Only the
+   *  manual form knows exactly where its doors are; an image-derived plan
+   *  has no entry here and its doorways stay open gaps. */
+  doors?: PlanDoor[];
+}
+
+/** One door leaf: a panel `width` metres wide standing `height` tall,
+ *  hinged at (hingeX, hingeZ) and swung open along (swingX, swingZ) — a
+ *  unit vector, always axis-aligned, pointing from the hinge into the
+ *  room the door opens into. */
+export interface PlanDoor {
+  name: string;
+  hingeX: number;
+  hingeZ: number;
+  width: number;
+  height: number;
+  swingX: number;
+  swingZ: number;
 }
 
 export type ManualPlacement = "right" | "below" | "custom";

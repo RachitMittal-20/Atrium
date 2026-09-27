@@ -11,12 +11,14 @@
  */
 
 import * as THREE from "three";
-import type { FurnitureItem, MetreRect, PlanLayout } from "@/types/blueprint";
+import type { FurnitureItem, MetreRect, PlanDoor, PlanLayout } from "@/types/blueprint";
 import { ATRIUM_CATEGORY_KEY } from "@/lib/exportCustomModel";
 import { furnishLayout } from "./furniture";
 
 const FLOOR_THICKNESS = 0.05;
 const WALL_COLOR = "#ece8e1";
+const DOOR_COLOR = "#8a6a4a";
+const DOOR_THICKNESS = 0.045;
 
 /** One BufferGeometry holding a box per rectangle (24 vertices each, flat
  *  normals), spanning y0..y1. Merged by hand: thousands of separate
@@ -121,6 +123,19 @@ export interface BuildOptions {
   furniture: boolean;
 }
 
+/** A door leaf shown standing open: a thin panel from the hinge, running
+ *  `width` along the swing direction (perpendicular to the wall it sits
+ *  in), floor to `height`. Simplified — no swing arc, no frame — but
+ *  enough for a doorway to read as a door rather than a bare gap. */
+function doorMesh(door: PlanDoor): THREE.Mesh {
+  const { hingeX, hingeZ, width, height, swingX, swingZ } = door;
+  const x0 = hingeX + Math.min(0, swingX * width) - (swingX === 0 ? DOOR_THICKNESS / 2 : 0);
+  const x1 = hingeX + Math.max(0, swingX * width) + (swingX === 0 ? DOOR_THICKNESS / 2 : 0);
+  const z0 = hingeZ + Math.min(0, swingZ * width) - (swingZ === 0 ? DOOR_THICKNESS / 2 : 0);
+  const z1 = hingeZ + Math.max(0, swingZ * width) + (swingZ === 0 ? DOOR_THICKNESS / 2 : 0);
+  return makeMesh(door.name, boxesGeometry([{ x0, z0, x1, z1 }], 0, height), DOOR_COLOR, "Fixture");
+}
+
 export function buildPlanScene(layout: PlanLayout, options: BuildOptions = { furniture: true }): THREE.Group {
   const group = new THREE.Group();
   group.name = "Blueprint";
@@ -130,6 +145,7 @@ export function buildPlanScene(layout: PlanLayout, options: BuildOptions = { fur
     );
   });
   if (options.furniture) for (const item of furnishLayout(layout)) group.add(furnitureMesh(item));
+  for (const door of layout.doors ?? []) group.add(doorMesh(door));
   group.add(makeMesh("Walls", boxesGeometry(layout.walls, 0, layout.wallHeight), WALL_COLOR, "Structural"));
   return group;
 }

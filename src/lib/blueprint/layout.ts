@@ -12,6 +12,7 @@ import {
   type ManualRoomSpec,
   type MetreRect,
   type PixelRect,
+  type PlanDoor,
   type PlanLayout,
   type PlanRoom,
   type RoomMap,
@@ -199,6 +200,10 @@ export function layoutFromManual(spec: ManualPlanSpec): PlanLayout {
     m.set(k, list);
   };
 
+  // Collected in the room's own (pre-shift) coordinates; shifted to the
+  // final origin alongside everything else, once the plan's centre is known.
+  const doors: PlanDoor[] = [];
+
   placed.forEach((r, i) => {
     // Extended by half a wall thickness so corners and T-joins close up.
     add(horiz, r.z0, r.x0 - t / 2, r.x1 + t / 2);
@@ -213,10 +218,14 @@ export function layoutFromManual(spec: ManualPlanSpec): PlanLayout {
     if (len < DOOR_WIDTH + 0.4) return;
     const mid = horizontalSide ? (r.x0 + r.x1) / 2 : (r.z0 + r.z1) / 2;
     const cut = { a: mid - DOOR_WIDTH / 2, b: mid + DOOR_WIDTH / 2 };
-    if (door === "north") add(horizCuts, r.z0, cut.a, cut.b);
-    else if (door === "south") add(horizCuts, r.z1, cut.a, cut.b);
-    else if (door === "west") add(vertCuts, r.x0, cut.a, cut.b);
-    else add(vertCuts, r.x1, cut.a, cut.b);
+    const name = `${spec.rooms[i].name.trim() || `Room ${i + 1}`} Door`;
+    // The leaf hinges at the cut's start and swings open toward the room's
+    // interior (perpendicular to the wall it sits in) — a simple, always
+    // legible "door standing open" rather than a true swing arc.
+    if (door === "north") { add(horizCuts, r.z0, cut.a, cut.b); doors.push({ name, hingeX: cut.a, hingeZ: r.z0, width: DOOR_WIDTH, height: spec.wallHeight, swingX: 0, swingZ: 1 }); }
+    else if (door === "south") { add(horizCuts, r.z1, cut.a, cut.b); doors.push({ name, hingeX: cut.a, hingeZ: r.z1, width: DOOR_WIDTH, height: spec.wallHeight, swingX: 0, swingZ: -1 }); }
+    else if (door === "west") { add(vertCuts, r.x0, cut.a, cut.b); doors.push({ name, hingeX: r.x0, hingeZ: cut.a, width: DOOR_WIDTH, height: spec.wallHeight, swingX: 1, swingZ: 0 }); }
+    else { add(vertCuts, r.x1, cut.a, cut.b); doors.push({ name, hingeX: r.x1, hingeZ: cut.a, width: DOOR_WIDTH, height: spec.wallHeight, swingX: -1, swingZ: 0 }); }
   });
 
   const walls: MetreRect[] = [];
@@ -247,5 +256,6 @@ export function layoutFromManual(spec: ManualPlanSpec): PlanLayout {
     color: roomColor(i),
     rects: [shift(r)],
   }));
-  return { wallHeight: spec.wallHeight, wallThickness: t, walls: walls.map(shift), rooms };
+  const shiftedDoors: PlanDoor[] = doors.map((d) => ({ ...d, hingeX: d.hingeX - ox, hingeZ: d.hingeZ - oz }));
+  return { wallHeight: spec.wallHeight, wallThickness: t, walls: walls.map(shift), rooms, doors: shiftedDoors };
 }
