@@ -103,6 +103,24 @@ async function readPixels(file: File): Promise<PlanPixels> {
   return { width, height, rgba: ctx.getImageData(0, 0, width, height).data };
 }
 
+/** OCR's own worst case — the first-ever run on a machine, downloading
+ *  its ~15 MB worker/engine/language files from a CDN before recognising
+ *  anything — normally finishes in well under this. Past it, something
+ *  is genuinely wrong (a stalled fetch, a broken cache) rather than just
+ *  slow, so analysis falls back to the size-based room-name guess instead
+ *  of leaving the dialog's "Building…" button stuck with no way out. */
+const OCR_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(onTimeout), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      () => { clearTimeout(timer); resolve(onTimeout); },
+    );
+  });
+}
+
 /** Stage one of the image path: read the plan into an editable layout so
  *  the person can check and rename the rooms before any 3D is built.
  *  Rooms get the name printed on the plan when OCR can read one there —
@@ -110,12 +128,13 @@ async function readPixels(file: File): Promise<PlanPixels> {
  *  the way, since that means the wall/room detector merged what are
  *  really separate rooms — falling back to the size-based guess for
  *  whatever OCR couldn't read (a blocked network, a hand-drawn plan with
- *  no printed text, a label OCR simply missed). */
+ *  no printed text, a label OCR simply missed, or OCR simply taking too
+ *  long — see OCR_TIMEOUT_MS above). */
 export async function analyzeBlueprintImage(image: File, options: BlueprintOptions): Promise<PlanLayout> {
   const pixels = await readPixels(image);
   const { walls, roomMap, pxPerMetre } = analyzePixels(pixels, options);
   const regions = roomMap.rooms.map((room) => ({ x0: room.bbox[0], y0: room.bbox[1], x1: room.bbox[2], y1: room.bbox[3] }));
-  const labels = await ocrPlanLabels(pixels, regions);
+  const labels = await withTimeout(ocrPlanLabels(pixels, regions), OCR_TIMEOUT_MS, []);
   const { map, names } = applyRoomLabels(roomMap, labels);
   return layoutFromImage(walls, map, pxPerMetre, options.wallHeight, names);
 }
