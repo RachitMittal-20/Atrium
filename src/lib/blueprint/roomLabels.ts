@@ -8,8 +8,14 @@
  *   - a room with two or more labels inside it is one the wall/room
  *     detector under-split — a bathroom and a hallway that share no
  *     doorway gap wide enough to separate them, say — and is split back
- *     into one room per label, dividing its pixels by whichever label
- *     centre each pixel sits closest to.
+ *     into one room per label, with a straight cut through the room
+ *     wherever the labels are furthest apart, in the direction (left-to-
+ *     right or top-to-bottom) that keeps the cut straight. Not a per-pixel
+ *     nearest-label split: with three or more labels that produces pie-
+ *     slice wedges fanning out from each label's point, which then blow
+ *     up into hundreds of sliver-thin floor rectangles once the diagonal
+ *     edges are decomposed into boxes — the flickering hairline seams a
+ *     real wall would never have, since a real wall is always straight.
  * A room with no label inside it (OCR missed it, or the label sits over
  * a wall/icon) is left exactly as detectRooms produced it, to be named by
  * the usual size-based guess.
@@ -95,26 +101,37 @@ export function applyRoomLabels(source: RoomMap, rawLabels: PlanLabel[]): Labele
       names.set(roomId, cleanText(group[0].text));
       continue;
     }
-    // Under-split: divide this room's pixels by nearest label (a simple
-    // Voronoi split — there's no wall between the labels to follow, that
-    // is exactly why they ended up as one region, so distance is the only
-    // signal available). Bounded to this room's own pixels, so it can
-    // never reach into a neighbouring room or the outdoors.
+    // Under-split: divide this room's pixels with a straight cut rather
+    // than a per-pixel nearest-label assignment. Whichever axis the
+    // labels are more spread out along (left-to-right vs. top-to-bottom)
+    // is the one a real wall would most plausibly run across; sorting the
+    // labels along that axis and cutting straight through the midpoint
+    // between each neighbouring pair turns the room into a small number
+    // of clean bands, each one still a simple rectangle-ish shape a floor
+    // (and furniture.ts's own placement) can work with — never the
+    // ragged, radiating wedges a true Voronoi split produces once there
+    // are three or more labels to divide between.
     const stats = group.map(() => ({ area: 0, b: [source.width, source.height, 0, 0] as [number, number, number, number] }));
     const room = source.rooms.find((r) => r.id === roomId)!;
     const [bx0, by0, bx1, by1] = room.bbox;
+    const spreadX = Math.max(...group.map((l) => l.x)) - Math.min(...group.map((l) => l.x));
+    const spreadY = Math.max(...group.map((l) => l.y)) - Math.min(...group.map((l) => l.y));
+    const horizontal = spreadX >= spreadY;
+    const order = group.map((_, g) => g).sort((a, b) => (horizontal ? group[a].x - group[b].x : group[a].y - group[b].y));
+    const cuts = order.slice(0, -1).map((g, i) => {
+      const next = order[i + 1];
+      return ((horizontal ? group[g].x : group[g].y) + (horizontal ? group[next].x : group[next].y)) / 2;
+    });
+    const bandFor = (v: number): number => {
+      let band = 0;
+      while (band < cuts.length && v >= cuts[band]) band++;
+      return order[band];
+    };
     for (let y = Math.max(0, by0); y < Math.min(source.height, by1); y++) {
       for (let x = Math.max(0, bx0); x < Math.min(source.width, bx1); x++) {
         const i = y * source.width + x;
         if (source.labels[i] !== roomId) continue;
-        let best = 0;
-        let bestDist = Infinity;
-        for (let g = 0; g < group.length; g++) {
-          const dx = x - group[g].x;
-          const dy = y - group[g].y;
-          const d = dx * dx + dy * dy;
-          if (d < bestDist) { bestDist = d; best = g; }
-        }
+        const best = bandFor(horizontal ? x : y);
         const newId = nextId + best;
         outLabels[i] = newId;
         const s = stats[best];
