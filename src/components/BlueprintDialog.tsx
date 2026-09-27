@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
 import { analyzeBlueprintImage, layoutFromManual, layoutToModel, manualPlanToModel } from "@/lib/blueprintToModel";
+import { roomKindFromName } from "@/lib/blueprint/furniture";
 import {
   BlueprintError,
   type ManualDoorSide,
@@ -57,6 +58,17 @@ const DEFAULT_ROOMS: RoomDraft[] = [
   { id: 2, name: "Kitchen", width: "3", depth: "4", placement: "right", x: "0", z: "0", door: "south" },
   { id: 3, name: "Bedroom", width: "4", depth: "3.5", placement: "below", x: "0", z: "0", door: "north" },
 ];
+
+/** Furniture is chosen from the room's name (see furniture.ts's own
+ *  roomKindFromName), so a name that doesn't say what the room is —
+ *  "50m x 55m", a stray label OCR misread, anything without a word like
+ *  bedroom/kitchen/living/bathroom/dining/study in it — silently gets no
+ *  furniture at all. Told inline next to the name, not just in the
+ *  paragraph above the list, so it's obvious before building rather than
+ *  a surprise afterwards. */
+function furnitureHint(name: string): string | null {
+  return roomKindFromName(name) === "other" ? "No furniture — name doesn't say what this room is" : null;
+}
 
 const num = (value: string): number => {
   const n = parseFloat(value);
@@ -370,17 +382,23 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
                       Atrium found {layout.rooms.length} room{layout.rooms.length === 1 ? "" : "s"} and guessed what each is. The name decides the furniture: use words like
                       bedroom, living room, kitchen, bathroom, dining or study (anything else stays empty).
                     </p>
-                    {layout.rooms.map((room, i) => (
-                      <div key={i} className="flex items-center gap-3">
-                        <span className="h-4 w-4 shrink-0 border border-rule" style={{ background: room.color }} aria-hidden="true" />
-                        <input
-                          aria-label={`Name of room ${i + 1}`}
-                          className={`${inputClass} flex-1`}
-                          value={room.name}
-                          onChange={(e) => renameRoom(i, e.target.value)}
-                        />
-                      </div>
-                    ))}
+                    {layout.rooms.map((room, i) => {
+                      const hint = furnitureHint(room.name);
+                      return (
+                        <div key={i} className="flex flex-col gap-1">
+                          <div className="flex items-center gap-3">
+                            <span className="h-4 w-4 shrink-0 border border-rule" style={{ background: room.color }} aria-hidden="true" />
+                            <input
+                              aria-label={`Name of room ${i + 1}`}
+                              className={`${inputClass} flex-1`}
+                              value={room.name}
+                              onChange={(e) => renameRoom(i, e.target.value)}
+                            />
+                          </div>
+                          {hint ? <p className="pl-7 font-mono text-3xs text-clay">{hint}</p> : null}
+                        </div>
+                      );
+                    })}
                   </div>
                   <div className="flex flex-col gap-2">
                     <span className={labelClass}>Detected plan (top view)</span>
@@ -424,6 +442,7 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
                           Remove
                         </button>
                       </div>
+                      {furnitureHint(room.name) ? <p className="font-mono text-3xs text-clay">{furnitureHint(room.name)}</p> : null}
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                         <Field label="Width (m)">
                           <input className={inputClass} inputMode="decimal" value={room.width} onChange={(e) => updateRoom(room.id, { width: e.target.value })} />
