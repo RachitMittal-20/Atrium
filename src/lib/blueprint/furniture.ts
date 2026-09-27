@@ -31,7 +31,7 @@ import type {
 export function roomKindFromName(name: string): RoomKind {
   const n = name.toLowerCase();
   if (/bath|toilet|\bwc\b|washroom|restroom|lavatory|shower/.test(n)) return "bathroom";
-  if (/bed|master|guest|nursery|kids?\b/.test(n)) return "bedroom";
+  if (/bed|master|primary|guest|nursery|kids?\b/.test(n)) return "bedroom";
   if (/kitchen|pantry|kitchenette/.test(n)) return "kitchen";
   if (/dining/.test(n)) return "dining";
   if (/living|lounge|drawing|family|sitting/.test(n)) return "living";
@@ -514,8 +514,64 @@ function furnishStudy(p: RoomPlacer) {
 
 // ---------------------------------------------------------------- public
 
+/** Largest axis-aligned rectangle that fits entirely inside the union of
+ *  `rects` (which may be an L shape, or the jagged diagonal boundary an
+ *  OCR label split leaves behind, since there's no real wall there to
+ *  follow -- see roomLabels.ts). Rasterises the room to a coarse grid
+ *  (10 cm cells, far finer than any doorway or piece of furniture cares
+ *  about) and runs the classic "biggest rectangle of 1s in a binary
+ *  matrix" scan: a per-row histogram of how tall each column's run of
+ *  filled cells above it is, then the largest rectangle under that
+ *  histogram via a monotonic stack (O(cols) per row). This exists so an
+ *  irregularly-shaped room still gets a real, sizeable spot for
+ *  furniture -- the room's own bounding box is typically far bigger than
+ *  its actual floor for a shape like this, and the single biggest
+ *  already-merged rectangle from maskToRects's own wall-following pass
+ *  can be a sliver a few centimetres wide. */
+function largestInscribedRect(rects: MetreRect[], bbox: MetreRect): MetreRect | null {
+  const CELL = 0.1;
+  const cols = Math.max(1, Math.round((bbox.x1 - bbox.x0) / CELL));
+  const rows = Math.max(1, Math.round((bbox.z1 - bbox.z0) / CELL));
+  const cw = (bbox.x1 - bbox.x0) / cols;
+  const ch = (bbox.z1 - bbox.z0) / rows;
+  const filled = new Uint8Array(cols * rows);
+  for (let ry = 0; ry < rows; ry++) {
+    const cz = bbox.z0 + (ry + 0.5) * ch;
+    for (let cx = 0; cx < cols; cx++) {
+      const x = bbox.x0 + (cx + 0.5) * cw;
+      if (rects.some((r) => x >= r.x0 && x <= r.x1 && cz >= r.z0 && cz <= r.z1)) filled[ry * cols + cx] = 1;
+    }
+  }
+
+  const heights = new Int32Array(cols);
+  let best = { area: 0, top: 0, left: 0, width: 0, height: 0 };
+  for (let ry = 0; ry < rows; ry++) {
+    for (let cx = 0; cx < cols; cx++) heights[cx] = filled[ry * cols + cx] ? heights[cx] + 1 : 0;
+    const stack: number[] = [];
+    for (let cx = 0; cx <= cols; cx++) {
+      const h = cx < cols ? heights[cx] : 0;
+      while (stack.length && heights[stack[stack.length - 1]] >= h) {
+        const height = heights[stack.pop()!];
+        const left = stack.length ? stack[stack.length - 1] + 1 : 0;
+        const width = cx - left;
+        const area = height * width;
+        if (area > best.area) best = { area, top: ry - height + 1, left, width, height };
+      }
+      stack.push(cx);
+    }
+  }
+  if (best.area === 0) return null;
+  return {
+    x0: bbox.x0 + best.left * cw,
+    x1: bbox.x0 + (best.left + best.width) * cw,
+    z0: bbox.z0 + best.top * ch,
+    z1: bbox.z0 + (best.top + best.height) * ch,
+  };
+}
+
 /** The room's usable rectangle: its bounding box when the room is
- *  essentially rectangular, otherwise its biggest single rectangle. */
+ *  essentially rectangular, otherwise the largest rectangle that fits
+ *  inside its actual floor shape. */
 function usableRect(room: PlanRoom, inset: number): MetreRect | null {
   const x0 = Math.min(...room.rects.map((r) => r.x0));
   const x1 = Math.max(...room.rects.map((r) => r.x1));
@@ -523,7 +579,10 @@ function usableRect(room: PlanRoom, inset: number): MetreRect | null {
   const z1 = Math.max(...room.rects.map((r) => r.z1));
   const total = room.rects.reduce((s, r) => s + rectArea(r), 0);
   const bbox: MetreRect = { x0, x1, z0, z1 };
-  const base = total >= 0.85 * rectArea(bbox) ? bbox : room.rects.reduce((a, b) => (rectArea(b) > rectArea(a) ? b : a));
+  const base =
+    total >= 0.85 * rectArea(bbox)
+      ? bbox
+      : largestInscribedRect(room.rects, bbox) ?? room.rects.reduce((a, b) => (rectArea(b) > rectArea(a) ? b : a));
   const r = { x0: base.x0 + inset, x1: base.x1 - inset, z0: base.z0 + inset, z1: base.z1 - inset };
   return r.x1 - r.x0 > 1.2 && r.z1 - r.z0 > 1.2 ? r : null;
 }
