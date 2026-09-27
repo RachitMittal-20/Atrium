@@ -79,6 +79,10 @@ export function layoutFromImage(
   roomMap: RoomMap,
   pxPerMetre: number,
   wallHeight: number,
+  /** Room id -> a name read off the plan by OCR (see roomLabels.ts).
+   *  Rooms with no entry fall back to the size-based guess, same as
+   *  before OCR existed. */
+  ocrNames?: Map<number, string>,
 ): PlanLayout {
   const { width, height, mask } = walls;
 
@@ -108,7 +112,7 @@ export function layoutFromImage(
 
   const wallRects = maskToRects(width, height, (i) => mask[i] === 1, tol).map(toMetres);
 
-  const rooms: PlanRoom[] = roomMap.rooms.map((room, idx) => {
+  const withIds: (PlanRoom & { id: number })[] = roomMap.rooms.map((room, idx) => {
     const [bx0, by0, bx1, by1] = room.bbox;
     const rects = maskToRects(
       width,
@@ -117,15 +121,16 @@ export function layoutFromImage(
       Math.max(2, tol * 2),
       { x0: Math.max(bx0, fx0), y0: Math.max(by0, fy0), x1: Math.min(bx1, fx1), y1: Math.min(by1, fy1) },
     ).map(toMetres);
-    return { name: `Room ${room.id}`, color: roomColor(idx), rects };
+    return { id: room.id, name: `Room ${room.id}`, color: roomColor(idx), rects };
   });
 
-  const kept = rooms.filter((r) => r.rects.length > 0);
-  // The image carries no labels, so start from a guess; the dialog lets
-  // the person rename every room before the model is built.
+  const kept = withIds.filter((r) => r.rects.length > 0);
+  // Rooms OCR read a label for keep it; everything else falls back to a
+  // size-based guess (the dialog also lets the person rename any room).
   const guesses = guessRoomNames(kept);
-  kept.forEach((room, i) => { room.name = guesses[i]; });
-  return { wallHeight, walls: wallRects, rooms: kept };
+  kept.forEach((room, i) => { room.name = ocrNames?.get(room.id) ?? guesses[i]; });
+  const rooms: PlanRoom[] = kept.map((room) => ({ name: room.name, color: room.color, rects: room.rects }));
+  return { wallHeight, walls: wallRects, rooms };
 }
 
 // ---------------------------------------------------------------- manual

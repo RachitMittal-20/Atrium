@@ -315,8 +315,10 @@ export function BlueprintDialog({ onClose, onCreate }: BlueprintDialogProps) {
             <div className="flex flex-col gap-5">
               <p className="font-mono text-3xs leading-relaxed text-muted">
                 Upload a floor plan (PNG or JPG). Atrium finds the walls and rooms and works out the measurements on its own.
-                It reads thick dark lines as walls; thin door and window marks become open gaps. Rooms are named Room 1, 2, …
-                and you can rename, recolor, comment and categorize them afterwards.
+                It reads thick dark lines as walls; thin door and window marks become open gaps. It also reads any printed
+                room names, and splits a room back into two when it finds two labels sitting inside one — that can take a
+                few extra seconds the first time. Where no label is found or read, the room is named by its size instead,
+                and every name can still be edited below.
               </p>
               <label
                 className={`flex cursor-pointer flex-col items-center justify-center gap-2 border border-dashed border-ruleHi bg-surface2 p-4 text-center hover:border-brass ${
