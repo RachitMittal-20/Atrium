@@ -202,6 +202,66 @@ function island(w: number, d: number): Piece {
   return [box(w, d, 0, 0.9, "#dcd6cb"), box(w + 0.04, d + 0.04, 0.9, 0.95, "#4d4f52")];
 }
 
+/** A plain counter slab with no hob or sink built in — used for a second,
+ *  perpendicular run of counter (see furnishKitchen's L shape), which
+ *  gets its own separate Double sink piece instead. */
+function counterSlab(w: number, d: number): Piece {
+  return [box(w, d, 0, 0.85, "#dcd6cb"), box(w, d + 0.02, 0.85, 0.9, "#4d4f52", 0, 0.01)];
+}
+
+/** A freestanding range, for a kitchen big enough that the hob built into
+ *  its main counter (see counter() above) isn't the only cooking surface. */
+function stove(w: number, d: number): Piece {
+  const p: Piece = [box(w, d, 0, 0.9, "#3a3c40"), box(w - 0.06, d - 0.06, 0.9, 0.92, "#1b1c1e")];
+  for (const dx of [-w / 4, w / 4]) for (const dz of [-d / 4, d / 4]) p.push(box(0.14, 0.14, 0.92, 0.94, DARK, dx, dz));
+  p.push(box(w - 0.1, 0.02, 0.3, 0.5, "#55585c", 0, d / 2 - 0.02)); // oven door
+  return p;
+}
+
+/** A wider double basin, set into whatever counter it's placed on — the
+ *  "big wash basin" a kitchen this size would actually have, distinct
+ *  from the small sink counter() already builds into a compact run. */
+function doubleSink(w: number, d: number): Piece {
+  const p: Piece = [box(w, d, 0.82, 0.9, "#dcd6cb")];
+  const basinW = w / 2 - 0.08;
+  for (const sx of [-1, 1]) p.push(box(basinW, d - 0.1, 0.76, 0.88, "#b8bcc0", sx * (basinW / 2 + 0.04)));
+  p.push(box(0.03, 0.03, 0.88, 1.1, "#a9aeb3", 0, -d / 2 + 0.08)); // faucet
+  return p;
+}
+
+/** A front-loading washing machine — common in a combined bathroom /
+ *  utility room like a "Bathroom 1" that also does laundry. */
+function washingMachine(w: number, d: number): Piece {
+  return [
+    box(w, d, 0, 0.85, "#e7e5e0"),
+    box(Math.min(w, d) * 0.6, 0.02, 0.2, 0.75, "#b9c4cc", 0, d / 2 - 0.01), // door porthole, front-facing
+    box(w - 0.06, 0.02, 0.78, 0.8, "#cfd2d4", 0, d / 2 - 0.02), // control panel
+  ];
+}
+
+/** A potted plant: a pot plus two overlapping clumps of foliage so it
+ *  doesn't read as a single flat-topped cube. */
+function plant(): Piece {
+  const potH = 0.35;
+  return [
+    box(0.32, 0.32, 0, potH, "#7a5c42"),
+    box(0.5, 0.5, potH, potH + 0.55, "#4c6b3f"),
+    box(0.28, 0.28, potH + 0.4, potH + 0.9, "#5c7d4c"),
+  ];
+}
+
+/** A rug: a thin flat pad, meant to sit under a seating group rather than
+ *  stand beside it — placed with RoomPlacer's placeOverlap, not placeAt. */
+function rug(w: number, d: number): Piece {
+  return [box(w, d, 0.001, 0.015, "#9c8468")];
+}
+
+/** A slim wall-mounted screen with no cabinet stand — a bedroom TV, where
+ *  the living room's tvUnit's low stand would run into the bed. */
+function wallTv(w: number): Piece {
+  return [box(w, 0.05, 1.05, 1.55, "#15171a")];
+}
+
 // ------------------------------------------------------------- placement
 
 type Side = "N" | "E" | "S" | "W";
@@ -326,6 +386,30 @@ class RoomPlacer {
     return true;
   }
 
+  /**
+   * Puts a piece down at an exact spot, allowed to overlap other placed
+   * furniture (still confined to the room rectangle) -- for a rug meant
+   * to sit under a sofa and coffee table, or a sink set into a counter
+   * it's placed on top of, where placeAt's overlap check would reject
+   * the very placement that's wanted.
+   */
+  placeOverlap(
+    label: string,
+    category: FurnitureItem["category"],
+    piece: Piece,
+    w: number,
+    d: number,
+    rot: Rot,
+    cx: number,
+    cz: number,
+  ): boolean {
+    const fp = this.footprint(w, d, rot, cx, cz);
+    const { r } = this;
+    if (fp.x0 < r.x0 - 1e-6 || fp.x1 > r.x1 + 1e-6 || fp.z0 < r.z0 - 1e-6 || fp.z1 > r.z1 + 1e-6) return false;
+    this.items.push({ name: this.uniqueName(label), category, boxes: piece.map((b) => orient(b, rot, cx, cz)) });
+    return true;
+  }
+
   /** A footprint grown forward by `reserve` metres (walking/sitting space). */
   private reserved(fp: MetreRect, rot: Rot, reserve: number): MetreRect {
     const out = { ...fp };
@@ -400,7 +484,29 @@ function furnishBedroom(p: RoomPlacer) {
   }
   const others = p.sidesByCover().filter((s) => s !== spot.side);
   const preferred = [OPPOSITE[spot.side], ...others.filter((s) => s !== OPPOSITE[spot.side])];
-  p.againstWall("Wardrobe", "Furniture", wardrobe(1.2, 0.6), 1.2, 0.6, preferred, ["start", "end", "center"], 0.7);
+  const wardrobeSpot = p.againstWall("Wardrobe", "Furniture", wardrobe(1.2, 0.6), 1.2, 0.6, preferred, ["start", "end", "center"], 0.7);
+  // A wall-mounted TV, on a wall the bed and wardrobe haven't already
+  // taken, once the room is roomy enough to spare one.
+  if (area >= 10) {
+    const used = [spot.side, wardrobeSpot?.side].filter((s): s is Side => !!s);
+    const tvSides = p.sidesByCover().filter((s) => !used.includes(s));
+    p.againstWall("TV", "Furniture", wallTv(1.0), 1.0, 0.05, tvSides.length ? tvSides : p.sidesByCover(), ["center"]);
+  }
+  // A small desk and chair in a corner, once the room is big enough that
+  // it isn't crowding the bed.
+  if (area >= 14) {
+    const used = [spot.side, wardrobeSpot?.side].filter((s): s is Side => !!s);
+    const deskSides = p.sidesByCover().filter((s) => !used.includes(s));
+    const deskSpot = p.againstWall("Desk", "Furniture", desk(1.1, 0.6), 1.1, 0.6, deskSides.length ? deskSides : p.sidesByCover(), ["start", "end"], 0.6);
+    if (deskSpot) {
+      const h = deskSpot.side === "N" || deskSpot.side === "S";
+      const mid = h ? (deskSpot.fp.x0 + deskSpot.fp.x1) / 2 : (deskSpot.fp.z0 + deskSpot.fp.z1) / 2;
+      const off = 0.6 + 0.25;
+      const cx = h ? mid : deskSpot.side === "W" ? p.r.x0 + off : p.r.x1 - off;
+      const cz = h ? (deskSpot.side === "N" ? p.r.z0 + off : p.r.z1 - off) : mid;
+      p.placeAt("Chair", "Furniture", chair(), 0.45, 0.45, SIDE_ROT[OPPOSITE[deskSpot.side]], cx, cz);
+    }
+  }
 }
 
 function furnishLiving(p: RoomPlacer) {
@@ -438,6 +544,21 @@ function furnishLiving(p: RoomPlacer) {
     const cz = horizontal ? (spot.side === "N" ? p.r.z0 + 0.25 : p.r.z1 - 0.25) : end;
     p.placeAt("Side table", "Furniture", nightstand(0.4, 0.4), 0.4, 0.4, rot, cx, cz);
   }
+  // A rug centred under the seating group, sized to the room but capped
+  // so it doesn't swallow a very large room -- placed with placeOverlap
+  // since it's meant to sit under the sofa and coffee table, not beside them.
+  const rw = Math.min(3.2, p.w * 0.6);
+  const rd = Math.min(2.6, p.d * 0.6);
+  if (rw > 1.0 && rd > 1.0) {
+    const rcx = (p.r.x0 + p.r.x1) / 2;
+    const rcz = (p.r.z0 + p.r.z1) / 2;
+    p.placeOverlap("Rug", "Furniture", rug(rw, rd), rw, rd, 0, rcx, rcz);
+  }
+  // A couple of potted plants against whatever wall has room, purely
+  // decorative so they're fine to skip when the room is tight.
+  const plantSides = p.sidesByCover();
+  p.againstWall("Plant", "Furniture", plant(), 0.5, 0.5, plantSides, ["start", "end"]);
+  p.againstWall("Plant", "Furniture", plant(), 0.5, 0.5, plantSides, ["end", "start"]);
 }
 
 function furnishDining(p: RoomPlacer) {
@@ -468,22 +589,47 @@ function furnishKitchen(p: RoomPlacer) {
     const len = p.wallLength(side);
     if (len < 1.8 || p.depthFrom(side) < 1.8) continue;
     if (p.cover(side, (side === "N" || side === "S" ? p.r.x0 : p.r.z0), (side === "N" || side === "S" ? p.r.x0 : p.r.z0) + len) < MIN_WALL_COVER) continue;
-    const run = Math.min(3.4, len - 0.7);
     const f = p.againstWall("Fridge", "Fixture", fridge(0.7, 0.7), 0.7, 0.7, [side], ["start"]);
     if (!f) continue;
-    // Counter continues from the fridge along the same wall.
     const horizontal = side === "N" || side === "S";
-    const start = (horizontal ? f.fp.x1 : f.fp.z1);
-    const c = start + run / 2;
     const rot = SIDE_ROT[side];
-    const cx = horizontal ? c : side === "W" ? p.r.x0 + 0.3 : p.r.x1 - 0.3;
-    const cz = horizontal ? (side === "N" ? p.r.z0 + 0.3 : p.r.z1 - 0.3) : c;
-    p.placeAt("Counter", "Fixture", counter(run, 0.6), run, 0.6, rot, cx, cz, 0.9);
+    const along = horizontal ? p.r.x0 : p.r.z0;
+    // Cursor tracks how far along this wall run we've placed things so
+    // far, starting right after the fridge.
+    let cursor = horizontal ? f.fp.x1 : f.fp.z1;
+    const wallEnd = along + len;
+    const runMax = Math.min(3.4, wallEnd - cursor);
+    if (runMax > 0.5) {
+      const c = cursor + runMax / 2;
+      const cx = horizontal ? c : side === "W" ? p.r.x0 + 0.3 : p.r.x1 - 0.3;
+      const cz = horizontal ? (side === "N" ? p.r.z0 + 0.3 : p.r.z1 - 0.3) : c;
+      p.placeAt("Counter", "Fixture", counter(runMax, 0.6), runMax, 0.6, rot, cx, cz, 0.9);
+      cursor += runMax;
+    }
+    // A freestanding range, past the counter's own built-in hob, when
+    // there's still enough wall left for one.
+    if (wallEnd - cursor >= 0.7) {
+      const sw = Math.min(0.75, wallEnd - cursor);
+      const c = cursor + sw / 2;
+      const cx = horizontal ? c : side === "W" ? p.r.x0 + 0.3 : p.r.x1 - 0.3;
+      const cz = horizontal ? (side === "N" ? p.r.z0 + 0.3 : p.r.z1 - 0.3) : c;
+      if (p.placeAt("Stove", "Fixture", stove(sw, 0.65), sw, 0.65, rot, cx, cz, 0.6)) cursor += sw;
+    }
     if (p.depthFrom(side) >= 3.6 && p.wallLength(side) >= 2.4) {
       const off = 0.6 + 1.0 + 0.35;
       const ix = horizontal ? (p.r.x0 + p.r.x1) / 2 : side === "W" ? p.r.x0 + off : p.r.x1 - off;
       const iz = horizontal ? (side === "N" ? p.r.z0 + off : p.r.z1 - off) : (p.r.z0 + p.r.z1) / 2;
       p.placeAt("Island", "Fixture", island(1.6, 0.7), 1.6, 0.7, rot, ix, iz);
+    }
+    // A second, perpendicular run of counter -- an L-shaped kitchen --
+    // with a bigger double sink set into it, on a wall this one hasn't
+    // already claimed.
+    const perpendicular: Side[] = horizontal ? ["W", "E"] : ["N", "S"];
+    const leg = p.againstWall("Counter", "Fixture", counterSlab(1.4, 0.6), 1.4, 0.6, perpendicular, ["start", "end"], 0.6);
+    if (leg) {
+      const lcx = (leg.fp.x0 + leg.fp.x1) / 2;
+      const lcz = (leg.fp.z0 + leg.fp.z1) / 2;
+      p.placeOverlap("Double sink", "Fixture", doubleSink(0.9, 0.55), 0.9, 0.55, SIDE_ROT[leg.side], lcx, lcz);
     }
     return;
   }
@@ -495,6 +641,11 @@ function furnishBathroom(p: RoomPlacer) {
   const order = bath ? sides.filter((s) => s !== bath.side).concat(bath.side) : sides;
   p.againstWall("Toilet", "Fixture", toilet(), 0.4, 0.7, order, ["start", "end", "center"], 0.5);
   p.againstWall("Vanity", "Fixture", vanity(0.6, 0.45), 0.6, 0.45, order, ["end", "start", "center"], 0.5);
+  // A washing machine, for a combined bathroom/utility room big enough
+  // to spare a bit of wall for one.
+  if (p.w * p.d >= 6) {
+    p.againstWall("Washing machine", "Fixture", washingMachine(0.6, 0.6), 0.6, 0.6, order, ["start", "end", "center"]);
+  }
 }
 
 function furnishStudy(p: RoomPlacer) {
@@ -517,14 +668,14 @@ function furnishStudy(p: RoomPlacer) {
 /** Largest axis-aligned rectangle that fits entirely inside the union of
  *  `rects` (which may be an L shape, or the jagged diagonal boundary an
  *  OCR label split leaves behind, since there's no real wall there to
- *  follow -- see roomLabels.ts). Rasterises the room to a coarse grid
+ *  follow — see roomLabels.ts). Rasterises the room to a coarse grid
  *  (10 cm cells, far finer than any doorway or piece of furniture cares
  *  about) and runs the classic "biggest rectangle of 1s in a binary
  *  matrix" scan: a per-row histogram of how tall each column's run of
  *  filled cells above it is, then the largest rectangle under that
  *  histogram via a monotonic stack (O(cols) per row). This exists so an
  *  irregularly-shaped room still gets a real, sizeable spot for
- *  furniture -- the room's own bounding box is typically far bigger than
+ *  furniture — the room's own bounding box is typically far bigger than
  *  its actual floor for a shape like this, and the single biggest
  *  already-merged rectangle from maskToRects's own wall-following pass
  *  can be a sliver a few centimetres wide. */
