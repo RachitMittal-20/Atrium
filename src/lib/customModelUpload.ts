@@ -41,11 +41,24 @@ export interface CustomModelUpload {
   sessionId: string;
 }
 
+/** Supabase Storage rejects object keys containing characters outside a
+ *  fairly small safe set (spaces and colons — both common in a filename
+ *  like "Screenshot 2026-09-27 at 11.53.17 AM-3d.glb" — trigger its
+ *  "Invalid key" error). The *display* name the person sees (in the tab
+ *  title, the download button, the shareable URL's own `name` query
+ *  param) stays exactly as chosen; only the storage path derived from it
+ *  is sanitised, and identically so on both the upload side here and the
+ *  lookup side in customModelPublicUrl below, so a joining tab always
+ *  reconstructs the same key the uploader actually wrote to. */
+function sanitizeForStorageKey(fileName: string): string {
+  return fileName.replace(/[^A-Za-z0-9._-]+/g, "-");
+}
+
 export async function uploadCustomModel(file: File): Promise<CustomModelUpload | null> {
   if (!supabase) return null;
 
   const sessionId = crypto.randomUUID();
-  const path = `${sessionId}/${file.name}`;
+  const path = `${sessionId}/${sanitizeForStorageKey(file.name)}`;
 
   const { error } = await supabase.storage.from(BUCKET).upload(path, file, {
     cacheControl: "3600",
@@ -68,7 +81,7 @@ export async function uploadCustomModel(file: File): Promise<CustomModelUpload |
  *  does, for the same reason. */
 export function customModelPublicUrl(sessionId: string, fileName: string): string | null {
   if (!supabase) return null;
-  const path = `${sessionId}/${fileName}`;
+  const path = `${sessionId}/${sanitizeForStorageKey(fileName)}`;
   const { data } = supabase.storage.from(BUCKET).getPublicUrl(path);
   return data.publicUrl;
 }
