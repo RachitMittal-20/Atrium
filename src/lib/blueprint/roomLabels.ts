@@ -42,10 +42,26 @@ export interface LabeledRooms {
 
 const cleanText = (text: string): string => text.replace(/\s+/g, " ").trim();
 
+/** True for the room's own printed dimension line ("3.0m x 2.75m",
+ *  "4.0m x 9.5m") that sits right under its name on the plan. That text
+ *  has exactly three letters -- the two "m"s and the "x" -- which is
+ *  enough to pass looksLikeLabel's letter-count check below, so without
+ *  this it reads as a second, independent room label next to the real
+ *  name. The two-or-more-labels path further down then treats that as a
+ *  room the wall detector under-split and cuts it into slivers, one of
+ *  which inherits the dimension text as its "name" and gets no furniture
+ *  -- this was the actual cause behind almost every over-split / missing-
+ *  furniture report this feature has produced, not the shape of the cut
+ *  itself. */
+function looksLikeDimension(text: string): boolean {
+  return /^\d+(\.\d+)?\s*m?\s*[x×]\s*\d+(\.\d+)?\s*m?$/i.test(text.trim());
+}
+
 /** True if a piece of OCR output is worth treating as a room name at all —
  *  filters out the stray symbols and furniture-icon noise OCR tends to
  *  produce on a line drawing, without being fussy about real labels. */
 function looksLikeLabel(text: string): boolean {
+  if (looksLikeDimension(text)) return false;
   const letters = text.replace(/[^A-Za-z]/g, "");
   return letters.length >= 3;
 }
