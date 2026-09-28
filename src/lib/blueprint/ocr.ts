@@ -110,21 +110,60 @@ export async function ocrPlanLabels(pixels: PlanPixels, regions: PixelRect[]): P
   }
 }
 
+/** Lowercased, letters-and-digits-only form of a label, for comparing two
+ *  OCR reads of what might be the same physical text regardless of case,
+ *  spacing, or punctuation differences between passes. */
+function normalizeForCompare(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** True when `a` and `b` are plausibly two OCR reads of the same printed
+ *  text. Tesseract's whole-image pass and a room's own tight crop scale
+ *  and segment the same words differently, so a second read of one label
+ *  often comes back missing a leading or trailing letter or two ("Dining
+ *  Room" -> "ining Roo") rather than matching exactly -- an exact-text
+ *  dedupe misses that and roomLabels.ts then treats it as a second,
+ *  independent label on the room, triggering an unwanted split. Fold both
+ *  strings down to bare letters/digits and treat one as a duplicate of
+ *  the other once it's a long-enough contiguous fragment of it. */
+function sameLabelText(a: string, b: string): boolean {
+  const na = normalizeForCompare(a);
+  const nb = normalizeForCompare(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  const [shorter, longer] = na.length <= nb.length ? [na, nb] : [nb, na];
+  // Require a decent amount of overlap so short, genuinely different
+  // labels (e.g. "Den" / "Ten") can't accidentally match each other.
+  if (shorter.length < 4) return false;
+  return longer.includes(shorter);
+}
+
 /** The whole-image pass and each region crop overlap, so the same label
- *  often comes back more than once; keep the highest-confidence reading
- *  of each cluster (same text, close together) instead of double-counting
- *  it as two labels in roomLabels.ts's split step. */
+ *  often comes back more than once -- sometimes read cleanly both times,
+ *  sometimes garbled/truncated in one of the two reads; keep the
+ *  highest-confidence reading of each cluster (same or near-same text,
+ *  close together) instead of double-counting it as two labels in
+ *  roomLabels.ts's split step. */
 function dedupe(labels: PlanLabel[]): PlanLabel[] {
   const out: PlanLabel[] = [];
   for (const label of labels) {
     const match = out.find(
       (o) =>
-        o.text.toLowerCase() === label.text.toLowerCase() &&
+        sameLabelText(o.text, label.text) &&
         Math.abs(o.x - label.x) < 40 &&
         Math.abs(o.y - label.y) < 40,
     );
-    if (!match) out.push(label);
-    else if (label.confidence > match.confidence) Object.assign(match, label);
+    if (!match) {
+      out.push(label);
+      continue;
+    }
+    // Keep the more complete reading as the label's text (a garbled crop
+    // read can score a higher confidence than a clean but merely "normal"
+    // whole-image read, so confidence alone isn't a good tie-breaker for
+    // which text to keep), but always keep the higher of the two
+    // confidences so downstream MIN_CONFIDENCE filtering isn't affected.
+    if (label.text.length > match.text.length) match.text = label.text;
+    if (label.confidence > match.confidence) match.confidence = label.confidence;
   }
   return out;
 }
