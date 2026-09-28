@@ -354,7 +354,7 @@ class RoomPlacer {
     return name;
   }
 
-  private footprint(w: number, d: number, rot: Rot, cx: number, cz: number): MetreRect {
+  footprint(w: number, d: number, rot: Rot, cx: number, cz: number): MetreRect {
     const swap = rot === 90 || rot === 270;
     const hw = (swap ? d : w) / 2;
     const hd = (swap ? w : d) / 2;
@@ -514,41 +514,88 @@ function furnishLiving(p: RoomPlacer) {
   const sides = p.sidesByCover().sort((a, b) => p.wallLength(b) - p.wallLength(a));
   const long = Math.max(p.w, p.d);
   const [sw, sd] = long >= 3.2 ? [2.0, 0.9] : [1.6, 0.85];
-  const spot = p.againstWall("Sofa", "Furniture", sofa(sw, sd), sw, sd, sides, ["center"], 0.35);
+
+  // A big, roughly-square living room reads as an open-plan space where a
+  // sectional sits floating in the middle facing the main (TV) wall, the
+  // way it would in a real furniture layout -- not flush against a wall
+  // like a bedroom's bed. Pushing every sofa to a wall regardless of room
+  // size is what a smaller room still needs (there's nowhere else to put
+  // one without blocking the floor), so this only kicks in once the room
+  // is both large in area and generous in its *shorter* dimension -- which
+  // also keeps a room whose detected shape runs unusually long (two rooms
+  // whose dividing wall wasn't fully picked up, say) on the safe,
+  // wall-anchored path below rather than floating a sofa in what is
+  // really empty space next to an unrelated room.
+  const floating = p.w * p.d >= 22 && Math.min(p.w, p.d) >= 4.2;
+  let spot: { side: Side; fp: MetreRect } | null = null;
+  if (floating) {
+    const tvWall = sides[0];
+    const backWall = OPPOSITE[tvWall];
+    const rot = SIDE_ROT[backWall];
+    const depth = p.depthFrom(backWall);
+    const backHorizontal = backWall === "N" || backWall === "S";
+    const dir = backWall === "N" || backWall === "W" ? 1 : -1;
+    const wallCoord = backWall === "N" ? p.r.z0 : backWall === "S" ? p.r.z1 : backWall === "W" ? p.r.x0 : p.r.x1;
+    const centerPerp = wallCoord + dir * depth * 0.44;
+    const mid0 = backHorizontal ? (p.r.x0 + p.r.x1) / 2 : (p.r.z0 + p.r.z1) / 2;
+    const cx = backHorizontal ? mid0 : centerPerp;
+    const cz = backHorizontal ? centerPerp : mid0;
+    if (p.placeAt("Sofa", "Furniture", sofa(sw, sd), sw, sd, rot, cx, cz, 0.35)) {
+      spot = { side: backWall, fp: p.footprint(sw, sd, rot, cx, cz) };
+    }
+  }
+  if (!spot) spot = p.againstWall("Sofa", "Furniture", sofa(sw, sd), sw, sd, sides, ["center"], 0.35);
   if (!spot) return;
   const horizontal = spot.side === "N" || spot.side === "S";
   const room = p.depthFrom(spot.side);
   const rot = SIDE_ROT[spot.side];
   const mid = horizontal ? (spot.fp.x0 + spot.fp.x1) / 2 : (spot.fp.z0 + spot.fp.z1) / 2;
+  // The sofa's own front edge (the side people sit facing) and which way
+  // that faces -- +x/+z ("N"/"W") or -x/-z ("S"/"E"). Everything below is
+  // measured from this edge rather than from the room's wall boundary, so
+  // it places the coffee table, rug and side table relative to the sofa
+  // itself whether the sofa is flush against that wall (the edge then
+  // coincides with the wall) or floating away from it above.
+  const front = spot.side === "N" ? spot.fp.z1 : spot.side === "S" ? spot.fp.z0 : spot.side === "W" ? spot.fp.x1 : spot.fp.x0;
+  const dir = spot.side === "N" || spot.side === "W" ? 1 : -1;
+  const spaceAhead = dir > 0 ? (horizontal ? p.r.z1 : p.r.x1) - front : front - (horizontal ? p.r.z0 : p.r.x0);
   // Coffee table centred in front of the sofa.
-  if (room >= sd + 0.4 + 0.6 + 0.4) {
-    const off = sd + 0.4 + 0.3;
-    const cx = horizontal ? mid : spot.side === "W" ? p.r.x0 + off : p.r.x1 - off;
-    const cz = horizontal ? (spot.side === "N" ? p.r.z0 + off : p.r.z1 - off) : mid;
+  if (spaceAhead >= 0.4 + 0.6 + 0.4) {
+    const off = 0.4 + 0.3;
+    const cx = horizontal ? mid : front + dir * off;
+    const cz = horizontal ? front + dir * off : mid;
     p.placeAt("Coffee table", "Furniture", coffeeTable(1.1, 0.6), 1.1, 0.6, rot, cx, cz);
   }
   // TV unit on the opposite wall, facing the sofa -- but only when that
   // wall is close enough to actually face the sofa across a normal living
-  // room. `room` is the room's full depth away from the sofa's wall, and
-  // for a room whose detected shape runs unusually long (two rooms whose
-  // dividing wall wasn't fully picked up, say) that can be many metres,
-  // putting the "TV facing the sofa" on a wall so far away it reads as a
-  // completely different, empty part of the room rather than the sofa's
-  // own space.
+  // room. `spaceAhead` is the clear distance from the sofa's own front
+  // edge to that far wall (not the room's raw wall-to-wall depth, which
+  // isn't the same thing once the sofa can float away from its own wall
+  // above) -- for a room whose detected shape runs unusually long (two
+  // rooms whose dividing wall wasn't fully picked up, say) that can be
+  // many metres, putting the "TV facing the sofa" on a wall so far away
+  // it reads as a completely different, empty part of the room rather
+  // than the sofa's own space.
   const opp = OPPOSITE[spot.side];
-  if (room >= 2.6 && room <= 7) p.againstWall("TV unit", "Furniture", tvUnit(1.4, 0.4), 1.4, 0.4, [opp], ["center"]);
+  if (spaceAhead >= 2.6 && spaceAhead <= 7) p.againstWall("TV unit", "Furniture", tvUnit(1.4, 0.4), 1.4, 0.4, [opp], ["center"]);
   // A pair of armchairs beside the coffee table when the room is generous.
   if (p.w * p.d >= 20) {
     const remaining = p.sidesByCover().filter((s) => s !== spot.side && s !== opp);
     p.againstWall("Armchair", "Furniture", armchair(0.85, 0.85), 0.85, 0.85, remaining, ["center"], 0.5);
   }
   // A side table tucked at one end of the sofa, if there's room for it.
+  // Level with the sofa's own perpendicular centre, not the real wall --
+  // the same point when the sofa is flush against that wall, but the
+  // right place beside a floating sofa instead of stranded back at the
+  // room's edge.
   const along = horizontal ? p.r.x0 : p.r.z0;
   const wallLen = p.wallLength(spot.side);
   const end = mid + (sw / 2 + 0.25);
-  if (end + 0.25 <= along + wallLen && p.cover(spot.side, end - 0.25, end + 0.25) >= MIN_WALL_COVER) {
-    const cx = horizontal ? end : spot.side === "W" ? p.r.x0 + 0.25 : p.r.x1 - 0.25;
-    const cz = horizontal ? (spot.side === "N" ? p.r.z0 + 0.25 : p.r.z1 - 0.25) : end;
+  const wallClear = floating || p.cover(spot.side, end - 0.25, end + 0.25) >= MIN_WALL_COVER;
+  if (end + 0.25 <= along + wallLen && wallClear) {
+    const perpMid = horizontal ? (spot.fp.z0 + spot.fp.z1) / 2 : (spot.fp.x0 + spot.fp.x1) / 2;
+    const cx = horizontal ? end : perpMid;
+    const cz = horizontal ? perpMid : end;
     p.placeAt("Side table", "Furniture", nightstand(0.4, 0.4), 0.4, 0.4, rot, cx, cz);
   }
   // A rug centred under the seating group itself -- the sofa and coffee
@@ -564,10 +611,10 @@ function furnishLiving(p: RoomPlacer) {
   const rw = Math.min(3.2, alongLen * 0.6);
   const rd = Math.min(2.6, room * 0.6);
   if (rw > 1.0 && rd > 1.0) {
-    const rugNear = sd / 2 + 0.05; // starts right at the sofa's front edge
-    const rugOffset = Math.min(rugNear + rd / 2, room - rd / 2 - 0.05);
-    const rcx = horizontal ? mid : spot.side === "W" ? p.r.x0 + rugOffset : p.r.x1 - rugOffset;
-    const rcz = horizontal ? (spot.side === "N" ? p.r.z0 + rugOffset : p.r.z1 - rugOffset) : mid;
+    const rugNearFromFront = 0.05 - sd / 2; // starts just behind the sofa's front edge, under the seat
+    const rugCenterFromFront = Math.min(rugNearFromFront + rd / 2, spaceAhead - rd / 2 - 0.05);
+    const rcx = horizontal ? mid : front + dir * rugCenterFromFront;
+    const rcz = horizontal ? front + dir * rugCenterFromFront : mid;
     p.placeOverlap("Rug", "Furniture", rug(horizontal ? rw : rd, horizontal ? rd : rw), horizontal ? rw : rd, horizontal ? rd : rw, 0, rcx, rcz);
   }
   // A couple of potted plants against whatever wall has room, purely
