@@ -54,7 +54,14 @@ const cleanText = (text: string): string => text.replace(/\s+/g, " ").trim();
  *  furniture report this feature has produced, not the shape of the cut
  *  itself. */
 function looksLikeDimension(text: string): boolean {
-  return /^\d+(\.\d+)?\s*m?\s*[x×]\s*\d+(\.\d+)?\s*m?$/i.test(text.trim());
+  // OCR sometimes misreads the leading digit of a dimension as a similar-
+  // looking letter (a "5" or "0" read as "O"/"o", most often on the small,
+  // low-res crops these lines get read from) -- normalise those back to
+  // digits before testing the shape, so "Om x 55m" (really "5m x 5.5m" or
+  // similar) is still recognised as a dimension line rather than slipping
+  // through as a second room label.
+  const normalized = text.trim().replace(/o/gi, "0");
+  return /^\d+(\.\d+)?\s*m?\s*[x×]\s*\d+(\.\d+)?\s*m?$/i.test(normalized);
 }
 
 /** True if a piece of OCR output is worth treating as a room name at all —
