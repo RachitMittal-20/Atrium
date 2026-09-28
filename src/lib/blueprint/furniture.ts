@@ -576,8 +576,8 @@ function furnishDining(p: RoomPlacer) {
     for (const side of [-1, 1]) {
       // Chairs face the table: back away from it.
       const rot: Rot = alongX ? (side < 0 ? 0 : 180) : side < 0 ? 90 : 270;
-      const x = alongX ? cx + t : cx + side * (td / 2 + 0.22);
-      const z = alongX ? cz + side * (td / 2 + 0.22) : cz + t;
+      const x = alongX ? cx + t : cx + side * (td / 2 + 0.28);
+      const z = alongX ? cz + side * (td / 2 + 0.28) : cz + t;
       p.placeAt("Chair", "Furniture", chair(), 0.45, 0.45, rot, x, z);
     }
   }
