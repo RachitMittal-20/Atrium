@@ -527,9 +527,16 @@ function furnishLiving(p: RoomPlacer) {
     const cz = horizontal ? (spot.side === "N" ? p.r.z0 + off : p.r.z1 - off) : mid;
     p.placeAt("Coffee table", "Furniture", coffeeTable(1.1, 0.6), 1.1, 0.6, rot, cx, cz);
   }
-  // TV unit on the opposite wall, facing the sofa.
+  // TV unit on the opposite wall, facing the sofa -- but only when that
+  // wall is close enough to actually face the sofa across a normal living
+  // room. `room` is the room's full depth away from the sofa's wall, and
+  // for a room whose detected shape runs unusually long (two rooms whose
+  // dividing wall wasn't fully picked up, say) that can be many metres,
+  // putting the "TV facing the sofa" on a wall so far away it reads as a
+  // completely different, empty part of the room rather than the sofa's
+  // own space.
   const opp = OPPOSITE[spot.side];
-  if (room >= 2.6) p.againstWall("TV unit", "Furniture", tvUnit(1.4, 0.4), 1.4, 0.4, [opp], ["center"]);
+  if (room >= 2.6 && room <= 7) p.againstWall("TV unit", "Furniture", tvUnit(1.4, 0.4), 1.4, 0.4, [opp], ["center"]);
   // A pair of armchairs beside the coffee table when the room is generous.
   if (p.w * p.d >= 20) {
     const remaining = p.sidesByCover().filter((s) => s !== spot.side && s !== opp);
@@ -544,15 +551,24 @@ function furnishLiving(p: RoomPlacer) {
     const cz = horizontal ? (spot.side === "N" ? p.r.z0 + 0.25 : p.r.z1 - 0.25) : end;
     p.placeAt("Side table", "Furniture", nightstand(0.4, 0.4), 0.4, 0.4, rot, cx, cz);
   }
-  // A rug centred under the seating group, sized to the room but capped
-  // so it doesn't swallow a very large room -- placed with placeOverlap
-  // since it's meant to sit under the sofa and coffee table, not beside them.
-  const rw = Math.min(3.2, p.w * 0.6);
-  const rd = Math.min(2.6, p.d * 0.6);
+  // A rug centred under the seating group itself -- the sofa and coffee
+  // table -- not the room's raw geometric centre. Those are the same
+  // point in an ordinary, roughly rectangular living room, but not in one
+  // whose detected shape runs unusually long (see the TV comment above):
+  // centring on the room there strands the rug metres away from the sofa,
+  // so the "seating area" reads as two unrelated pieces of furniture
+  // sitting on an otherwise empty floor instead of one place to sit.
+  // Placed with placeOverlap since it's meant to sit under the sofa and
+  // coffee table, not beside them.
+  const alongLen = p.wallLength(spot.side);
+  const rw = Math.min(3.2, alongLen * 0.6);
+  const rd = Math.min(2.6, room * 0.6);
   if (rw > 1.0 && rd > 1.0) {
-    const rcx = (p.r.x0 + p.r.x1) / 2;
-    const rcz = (p.r.z0 + p.r.z1) / 2;
-    p.placeOverlap("Rug", "Furniture", rug(rw, rd), rw, rd, 0, rcx, rcz);
+    const rugNear = sd / 2 + 0.05; // starts right at the sofa's front edge
+    const rugOffset = Math.min(rugNear + rd / 2, room - rd / 2 - 0.05);
+    const rcx = horizontal ? mid : spot.side === "W" ? p.r.x0 + rugOffset : p.r.x1 - rugOffset;
+    const rcz = horizontal ? (spot.side === "N" ? p.r.z0 + rugOffset : p.r.z1 - rugOffset) : mid;
+    p.placeOverlap("Rug", "Furniture", rug(horizontal ? rw : rd, horizontal ? rd : rw), horizontal ? rw : rd, horizontal ? rd : rw, 0, rcx, rcz);
   }
   // A couple of potted plants against whatever wall has room, purely
   // decorative so they're fine to skip when the room is tight.
